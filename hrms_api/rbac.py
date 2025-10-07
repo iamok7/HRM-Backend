@@ -282,6 +282,103 @@ def rbac_revoke_perm(role_code: str):
     db.session.commit()
     return _ok({"revoked": {"role": r.code, "permission": p.code}})
 
+
+# -------- USER: CREATE + OPTIONAL ROLE ASSIGN --------
+from sqlalchemy.exc import IntegrityError
+
+def _set_password(u: User, raw: str) -> bool:
+    # Prefer your model’s method if present
+    for m in ("set_password", "set_pw", "password_set", "set_password_hash"):
+        if hasattr(u, m) and callable(getattr(u, m)):
+            getattr(u, m)(raw)
+            return True
+    # Fallback to Werkzeug hash
+    try:
+        from werkzeug.security import generate_password_hash
+        ph = generate_password_hash(raw)
+        if hasattr(u, "password_hash"):
+            u.password_hash = ph; return True
+        if hasattr(u, "password"):
+            u.password = ph; return True
+    except Exception:
+        current_app.logger.exception("Password hashing failed")
+    return False
+
+def _apply_user_name(u: User, name: str | None):
+    if not name: return
+    for f in ("full_name", "name", "display_name", "first_last", "title"):
+        if hasattr(u, f):
+            setattr(u, f, name)
+            break
+    # optional split if you keep first_name/last_name
+    if " " in name:
+        first, last = name.split(" ", 1)
+        if hasattr(u, "first_name"): u.first_name = first
+        if hasattr(u, "last_name"):  u.last_name  = last
+
+@bp.post("/users")
+@jwt_required()
+@require_perm("rbac.manage")
+def rbac_create_user():
+    """
+    Create a login user and (optionally) assign a role.
+    JSON:
+    {
+      "email": "jane@demo.local",
+      "password": "Secret#123",
+      "name": "Jane Doe",          # optional (mapped to full_name/name/etc.)
+      "role": "employee"           # optional; defaults to 'employee' if omitted
+    }
+    """
+    j = _json()
+    email = (j.get("email") or "").strip().lower()
+    password = (j.get("password") or "")
+    name = (j.get("name") or "").strip() or None
+    role_code = (j.get("role") or "employee").strip().lower()
+
+    if not email or not password:
+        return _fail("email and password required", 422)
+    if len(password) < 6:
+        return _fail("password too short (min 6)", 422)
+
+    # role must exist (ensure-defaults can create common ones)
+    role = Role.query.filter_by(code=role_code).first()
+    if not role:
+        return _fail(f"role '{role_code}' not found", 404)
+
+    try:
+        # unique email check
+        existing = User.query.filter_by(email=email).first()
+        if existing:
+            return _fail("user already exists", 409)
+
+        u = User(email=email)
+        _apply_user_name(u, name)
+        if not _set_password(u, password):
+            return _fail("unable to set password", 500)
+
+        db.session.add(u); db.session.flush()
+
+        # assign role
+        if not UserRole.query.filter_by(user_id=u.id, role_id=role.id).first():
+            db.session.add(UserRole(user_id=u.id, role_id=role.id))
+
+        db.session.commit()
+        return _ok({
+            "id": u.id,
+            "email": u.email,
+            "name": getattr(u, "full_name", None) or getattr(u, "name", None),
+            "assigned_role": role.code
+        }, 201)
+
+    except IntegrityError:
+        db.session.rollback()
+        return _fail("user already exists (unique email)", 409)
+    except Exception as e:
+        current_app.logger.exception("create user failed")
+        db.session.rollback()
+        return _fail("internal error", 500)
+
 # -------- USER <-> ROLE --------
 @bp.post("/users/assign")
 @jwt_required()
