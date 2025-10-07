@@ -1,0 +1,9 @@
+(.venv) PS C:\Users\omkar\OneDrive\Desktop\HRMS\apps\backend> python -m flask seed-core
+Seeded/ensured: company DEMO; admin@demo.local (existing) / 4445; hr@swstk.in (existing) / 4445; emp@swstk.in (existing) / 4445
+(.venv) PS C:\Users\omkar\OneDrive\Desktop\HRMS\apps\backend> python -m flask seed-rbac
+{'ok': True, 'roles': 4, 'perms': 31}
+(.venv) PS C:\Users\omkar\OneDrive\Desktop\HRMS\apps\backend> python -m flask grant-admin hr@swstk.in
+Granted 'admin' to hr@swstk.in
+(.venv) PS C:\Users\omkar\OneDrive\Desktop\HRMS\apps\backend> python -m flask rbac-grant-all hr
+Granted 16 permissions to role 'hr'
+(.venv) PS C:\Users\omkar\OneDrive\Desktop\HRMS\apps\backend> 

@@ -40,13 +40,7 @@ DEFAULT_PERMS = [
 
 ROLE_PERM_MAP = {
     "admin": DEFAULT_PERMS,
-    "hr": [
-        "master.companies.read","master.departments.read","master.designations.read","master.grades.read","master.locations.read",
-        "employee.read","employee.create","employee.update","employee.extra.read","employee.extra.update",
-        "attendance.punch.read","attendance.assign.read","attendance.calendar.read","attendance.monthly.read",
-        "leave.types.read","leave.types.manage","leave.balance.read","leave.balance.adjust","leave.request.approve",
-        "reports.view","payroll.view",
-    ],
+    "hr": DEFAULT_PERMS,
     "manager": [
         "employee.read",
         "attendance.punch.read","attendance.missed.read","attendance.missed.approve",

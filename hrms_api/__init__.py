@@ -65,7 +65,7 @@ def create_app():
     from hrms_api.blueprints.leave import bp as leave_bp
     from hrms_api.blueprints.attendance_missed_punch import bp as attendance_missed_bp
     from hrms_api.blueprints.security import bp as security_bp
-
+    from .rbac import bp as rbac_bp
 
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
@@ -89,16 +89,68 @@ def create_app():
     app.register_blueprint(leave_bp)
     app.register_blueprint(attendance_missed_bp)
     app.register_blueprint(security_bp)
-
+    app.register_blueprint(rbac_bp)
 
 
 
     # ---- CLI (registered on this app instance) ----
     @app.cli.command("seed-core")
     def seed_core():
-        """Seed demo company and admin user."""
+        """Seed demo company and core users (admin, HR, employee)."""
         from hrms_api.models.user import User
         from hrms_api.models.master import Company
+        from hrms_api.models.security import Role, UserRole
+        from hrms_api.models.employee import Employee
+
+        def ensure_role(code: str) -> Role:
+            role = Role.query.filter_by(code=code).first()
+            if not role:
+                role = Role(code=code)
+                db.session.add(role)
+                db.session.commit()
+            return role
+
+        def ensure_user(email: str, full_name: str, role_code: str, password: str = "4445"):
+            user = User.query.filter_by(email=email).first()
+            created = False
+            if not user:
+                user = User(email=email, full_name=full_name, status="active")
+                user.set_password(password)
+                db.session.add(user)
+                db.session.commit()
+                created = True
+
+            role = ensure_role(role_code)
+            if not any(ur.role_id == role.id for ur in user.user_roles):
+                db.session.add(UserRole(user_id=user.id, role_id=role.id))
+                db.session.commit()
+
+            return user, created
+
+        def ensure_employee_profile(email: str, first_name: str, last_name: str = "Demo"):
+            emp = Employee.query.filter_by(email=email).first()
+            if emp:
+                return False
+
+            c, loc, dept, des, grd, cc = _ensure_demo_masters()
+            emp = Employee(
+                company_id=c.id,
+                location_id=loc.id if loc else None,
+                department_id=dept.id if dept else None,
+                designation_id=des.id if des else None,
+                grade_id=grd.id if grd else None,
+                cost_center_id=cc.id if cc else None,
+                code="EMP-DEMO",
+                email=email,
+                first_name=first_name,
+                last_name=last_name,
+                employment_type="fulltime",
+                status="active",
+                doj=datetime.utcnow().date(),
+            )
+            db.session.add(emp)
+            db.session.commit()
+            return True
 
         c = Company.query.filter_by(code="DEMO").first()
         if not c:
@@ -106,14 +158,18 @@ def create_app():
             db.session.add(c)
             db.session.commit()
 
-        u = User.query.filter_by(email="admin@demo.local").first()
-        if not u:
-            u = User(email="admin@demo.local", full_name="Demo Admin")
-            u.set_password("4445")
-            db.session.add(u)
-            db.session.commit()
+        admin_user, admin_created = ensure_user("admin@demo.local", "Demo Admin", "admin")
+        hr_user, hr_created = ensure_user("hr@swstk.in", "HR Manager", "hr")
+        employee_user, employee_created = ensure_user("emp@swstk.in", "Demo Employee", "employee")
+        employee_profile_created = ensure_employee_profile(employee_user.email, "Demo", "Employee")
 
-        click.echo("Seeded: company DEMO, user admin@demo.local / 4445")
+        click.echo(
+            "Seeded/ensured: company DEMO; "
+            f"admin@demo.local ({'created' if admin_created else 'existing'}) / 4445; "
+            f"hr@swstk.in ({'created' if hr_created else 'existing'}) / 4445; "
+            f"emp@swstk.in ({'created' if employee_created else 'existing'}) / 4445"
+            + ("; employee profile created" if employee_profile_created else "")
+        )
 
     @app.cli.command("seed-masters")
     def seed_masters():
@@ -657,6 +713,49 @@ def create_app():
     def seed_rbac():
         from hrms_api.seed_rbac import run
         click.echo(run())
+
+
+
+    @app.cli.command("grant-admin")
+    @click.argument("email")
+    def grant_admin(email):
+        """Attach 'admin' role to a user by email."""
+        from hrms_api.extensions import db
+        from hrms_api.models.user import User
+        from hrms_api.models.security import Role, UserRole
+
+        u = User.query.filter_by(email=email).first()
+        if not u:
+            click.echo(f"User {email} not found"); return
+        admin = Role.query.filter_by(code="admin").first()
+        if not admin:
+            admin = Role(code="admin"); db.session.add(admin); db.session.commit()
+        has = any(ur.role_id == admin.id for ur in u.user_roles)
+        if not has:
+            db.session.add(UserRole(user_id=u.id, role_id=admin.id)); db.session.commit()
+        click.echo(f"Granted 'admin' to {email}")
+
+    @app.cli.command("rbac-grant-all")
+    @click.argument("role_code")
+    def rbac_grant_all(role_code):
+        """Grant ALL existing permissions to a role (e.g., 'hr' or 'admin')."""
+        from hrms_api.extensions import db
+        from hrms_api.models.security import Role, Permission, RolePermission
+
+        role = Role.query.filter_by(code=role_code).first()
+        if not role:
+            click.echo(f"Role {role_code} not found"); return
+        perm_ids = [p.id for p in Permission.query.all()]
+        existing = {(rp.role_id, rp.permission_id) for rp in role.permissions}
+        new_links = 0
+        for pid in perm_ids:
+            key = (role.id, pid)
+            if key not in existing:
+                db.session.add(RolePermission(role_id=role.id, permission_id=pid))
+                new_links += 1
+        db.session.commit()
+        click.echo(f"Granted {new_links} permissions to role '{role_code}'")
+
 
 
     return app
