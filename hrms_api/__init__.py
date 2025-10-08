@@ -91,6 +91,16 @@ def create_app():
     app.register_blueprint(security_bp)
     app.register_blueprint(rbac_bp)
 
+    
+    # in hrms_api/__init__.py (inside create_app, after app.register_blueprint(rbac_bp))
+    with app.app_context():
+        try:
+            from hrms_api.rbac import _ensure_auth_settings, _apply_settings_to_app
+            s = _ensure_auth_settings()
+            _apply_settings_to_app(s)
+        except Exception as e:
+            app.logger.warning("Could not warm auth settings: %s", e)
+
 
 
     # ---- CLI (registered on this app instance) ----

@@ -379,6 +379,8 @@ def rbac_create_user():
         db.session.rollback()
         return _fail("internal error", 500)
 
+
+
 # -------- USER <-> ROLE --------
 @bp.post("/users/assign")
 @jwt_required()
@@ -429,6 +431,311 @@ def rbac_unassign_role():
     UserRole.query.filter_by(user_id=u.id, role_id=r.id).delete()
     db.session.commit()
     return _ok({"unassigned": {"user": u.email, "role": r.code}})
+
+# -------- USER: INSPECT ROLES + PERMISSIONS --------
+@bp.get("/users/inspect")
+@jwt_required()
+@require_perm("rbac.manage")   # only RBAC managers can inspect others
+def rbac_user_inspect():
+    """
+    Query params (one of):
+      - email=emp1@demo.local
+      - user_id=42
+    Returns user's roles and flattened permission codes.
+    """
+    email = (request.args.get("email") or "").strip().lower()
+    user_id = request.args.get("user_id", type=int)
+
+    u = None
+    if user_id:
+        u = db.session.get(User, user_id)
+    if not u and email:
+        u = User.query.filter_by(email=email).first()
+    if not u:
+        return _fail("user not found", 404)
+
+    # roles via relationship (many-to-many)
+    roles = []
+    if hasattr(u, "roles"):
+        roles = [ _role_row(r) for r in getattr(u, "roles") ]
+
+    # permissions via existing helper
+    perms = sorted(list(_perm_set_for(u.id)))
+
+    return _ok({
+        "user": _user_row(u),
+        "roles": roles,
+        "perms": perms,
+        "counts": {"roles": len(roles), "perms": len(perms)}
+    })
+
+# ===== SESSION / TOKEN SETTINGS =====
+from datetime import datetime, timedelta, timezone
+from sqlalchemy import Column, Integer, DateTime, String
+from sqlalchemy.exc import SQLAlchemyError
+
+# 1-row table persisted in DB
+class AuthSettings(db.Model):
+    __tablename__ = "auth_settings"
+    id = Column(Integer, primary_key=True)
+    access_expires_seconds = Column(Integer, nullable=False, default=3600)   # 60 min
+    refresh_expires_seconds = Column(Integer, nullable=False, default=1209600)  # 14 days
+    token_header_type = Column(String(32), nullable=False, default="Bearer")
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    updated_by = Column(Integer, nullable=True)  # user_id of updater (optional)
+
+def _ensure_auth_settings():
+    s = AuthSettings.query.get(1)
+    if not s:
+        # Take defaults from app.config if present
+        acc = current_app.config.get("JWT_ACCESS_TOKEN_EXPIRES")
+        ref = current_app.config.get("JWT_REFRESH_TOKEN_EXPIRES")
+        def to_secs(v, fallback):
+            if isinstance(v, timedelta): return int(v.total_seconds())
+            if isinstance(v, (int, float)): return int(v)
+            return fallback
+        s = AuthSettings(
+            id=1,
+            access_expires_seconds=to_secs(acc, 3600),
+            refresh_expires_seconds=to_secs(ref, 1209600),
+            token_header_type=current_app.config.get("JWT_HEADER_TYPE", "Bearer"),
+        )
+        db.session.add(s); db.session.commit()
+    return s
+
+def _apply_settings_to_app(s: AuthSettings):
+    # Make them live immediately for new tokens
+    current_app.config["JWT_ACCESS_TOKEN_EXPIRES"]  = timedelta(seconds=s.access_expires_seconds)
+    current_app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(seconds=s.refresh_expires_seconds)
+    current_app.config["JWT_HEADER_TYPE"]           = s.token_header_type
+
+@bp.get("/session/settings")
+@jwt_required()
+@require_perm("rbac.manage")
+def rbac_get_session_settings():
+    s = _ensure_auth_settings()
+    _apply_settings_to_app(s)
+    return _ok({
+        "access_expires_seconds": s.access_expires_seconds,
+        "access_expires_minutes": s.access_expires_seconds // 60,
+        "refresh_expires_seconds": s.refresh_expires_seconds,
+        "refresh_expires_days": round(s.refresh_expires_seconds / 86400, 2),
+        "token_header_type": s.token_header_type,
+        "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+        "updated_by": s.updated_by,
+    })
+
+@bp.post("/session/settings")
+@jwt_required()
+@require_perm("rbac.manage")
+def rbac_update_session_settings():
+    """
+    JSON (any of these fields optional):
+    {
+      "access_minutes": 45,         # OR access_seconds
+      "refresh_days": 7,            # OR refresh_seconds
+      "token_header_type": "Bearer" # optional
+    }
+    """
+    j = _json()
+    s = _ensure_auth_settings()
+
+    acc_sec = j.get("access_seconds")
+    if acc_sec is None and "access_minutes" in j:
+        acc_sec = int(j.get("access_minutes")) * 60
+
+    ref_sec = j.get("refresh_seconds")
+    if ref_sec is None and "refresh_days" in j:
+        ref_sec = int(j.get("refresh_days")) * 86400
+
+    if acc_sec is not None:
+        if int(acc_sec) < 60: return _fail("access must be >= 60 seconds", 422)
+        s.access_expires_seconds = int(acc_sec)
+
+    if ref_sec is not None:
+        if int(ref_sec) < 3600: return _fail("refresh must be >= 1 hour", 422)
+        s.refresh_expires_seconds = int(ref_sec)
+
+    tht = (j.get("token_header_type") or "").strip()
+    if tht:
+        s.token_header_type = tht
+
+    # who updated?
+    try:
+        ident = get_jwt_identity()
+        u = db.session.get(User, int(ident)) if str(ident).isdigit() else None
+        s.updated_by = getattr(u, "id", None)
+    except Exception:
+        pass
+
+    s.updated_at = datetime.now(timezone.utc)
+
+    try:
+        db.session.commit()
+        _apply_settings_to_app(s)
+        return _ok({
+            "message": "session settings updated",
+            "settings": {
+                "access_expires_seconds": s.access_expires_seconds,
+                "refresh_expires_seconds": s.refresh_expires_seconds,
+                "token_header_type": s.token_header_type
+            }
+        })
+    except SQLAlchemyError:
+        db.session.rollback()
+        current_app.logger.exception("failed to update session settings")
+        return _fail("db error", 500)
+
+# ---- TOKEN HEALTH ----
+@bp.get("/token/health")
+@jwt_required()
+def rbac_token_health():
+    """
+    Returns validity info for the *current* token.
+    """
+    from flask_jwt_extended import get_jwt
+    claims = get_jwt()
+    now = datetime.now(timezone.utc)
+    # JWT times are seconds since epoch (UTC)
+    iat = datetime.fromtimestamp(claims.get("iat", 0), tz=timezone.utc) if "iat" in claims else None
+    nbf = datetime.fromtimestamp(claims.get("nbf", 0), tz=timezone.utc) if "nbf" in claims else None
+    exp = datetime.fromtimestamp(claims.get("exp", 0), tz=timezone.utc) if "exp" in claims else None
+    secs_left = int((exp - now).total_seconds()) if exp else None
+    status = "ok" if exp and secs_left is not None and secs_left > 0 else "expired"
+
+    return _ok({
+        "status": status,
+        "identity": get_jwt_identity(),
+        "issued_at": iat.isoformat() if iat else None,
+        "not_before": nbf.isoformat() if nbf else None,
+        "expires_at": exp.isoformat() if exp else None,
+        "seconds_until_expiry": secs_left,
+        "server_time": now.isoformat()
+    })
+
+
+from sqlalchemy.exc import ProgrammingError, OperationalError
+
+def _ensure_auth_settings():
+    # 1) make sure table exists (no-op if already there)
+    try:
+        AuthSettings.__table__.create(db.engine, checkfirst=True)
+    except Exception:
+        current_app.logger.exception("auth_settings create-if-missing failed (ignored)")
+
+    # 2) ensure the singleton row
+    s = db.session.get(AuthSettings, 1)
+    if not s:
+        acc = current_app.config.get("JWT_ACCESS_TOKEN_EXPIRES")
+        ref = current_app.config.get("JWT_REFRESH_TOKEN_EXPIRES")
+
+        def _secs(v, fallback):
+            if isinstance(v, timedelta): return int(v.total_seconds())
+            if isinstance(v, (int, float)): return int(v)
+            return fallback
+
+        s = AuthSettings(
+            id=1,
+            access_expires_seconds=_secs(acc, 3600),        # 60 min default
+            refresh_expires_seconds=_secs(ref, 1209600),    # 14 days default
+            token_header_type=current_app.config.get("JWT_HEADER_TYPE", "Bearer"),
+        )
+        db.session.add(s)
+        db.session.commit()
+    return s
+
+
+# -------- SYSTEM: ROUTE INVENTORY / COUNTS (ALL BLUEPRINTS) --------
+from collections import defaultdict
+
+@bp.get("/system/routes")
+@jwt_required()
+@require_perm("rbac.manage")
+def system_routes():
+    """
+    Returns ALL Flask routes in the app (every blueprint), with filters.
+
+    Query params (all optional):
+      - method=GET|POST|PUT|PATCH|DELETE   filter by one method
+      - only_get=true                      shorthand for method=GET
+      - counts_only=true                   return only counts/summary (no list)
+      - include_internal=true              include Flask internals like /static
+      - blueprint=rbac,employees,...       comma list to include only these blueprints
+      - prefix=/api/                       include only rules that start with this prefix
+      - exclude=/static,/favicon.ico       comma list of prefixes to skip
+
+    Examples:
+      /api/v1/rbac/system/routes?only_get=true
+      /api/v1/rbac/system/routes?counts_only=true&prefix=/api/
+      /api/v1/rbac/system/routes?blueprint=employees,attendance&prefix=/api/v1/
+    """
+    q = request.args
+    method = (q.get("method") or "").strip().upper()
+    if q.get("only_get", "").lower() == "true":
+        method = "GET"
+    counts_only     = q.get("counts_only", "").lower() == "true"
+    include_internal= q.get("include_internal", "").lower() == "true"
+    bp_filter       = set(s.strip() for s in (q.get("blueprint") or "").split(",") if s.strip())
+    prefix          = (q.get("prefix") or "").strip()
+    exclude_list    = [s.strip() for s in (q.get("exclude") or "").split(",") if s.strip()]
+
+    items = []
+    by_method = defaultdict(int)
+    by_bp     = defaultdict(int)
+
+    for rule in current_app.url_map.iter_rules():
+        rule_str = str(rule)
+
+        # skip internals unless asked
+        if not include_internal and (rule.endpoint == "static" or rule_str.startswith("/static")):
+            continue
+
+        # prefix include filter
+        if prefix and not rule_str.startswith(prefix):
+            continue
+
+        # excluded prefixes
+        if any(rule_str.startswith(x) for x in exclude_list):
+            continue
+
+        methods = sorted(m for m in rule.methods if m not in ("HEAD", "OPTIONS"))
+        if method and method not in methods:
+            continue
+
+        endpoint = rule.endpoint  # e.g. "rbac.rbac_list_roles"
+        bp_name = endpoint.split(".", 1)[0] if "." in endpoint else None
+        if bp_filter and (bp_name not in bp_filter):
+            continue
+
+        # counts
+        for m in methods:
+            by_method[m] += 1
+        by_bp[bp_name or "root"] += 1
+
+        items.append({
+            "rule": rule_str,
+            "methods": methods,
+            "endpoint": endpoint,
+            "blueprint": bp_name,
+        })
+
+    # sort for readability
+    items.sort(key=lambda x: ((x["blueprint"] or ""), x["rule"]))
+
+    summary = {
+        "total_routes": len(items),
+        "by_method": dict(sorted(by_method.items())),
+        "by_blueprint": dict(sorted(by_bp.items())),
+        "filtered_by": {
+            "method": method or None,
+            "blueprints": sorted(list(bp_filter)) if bp_filter else None,
+            "prefix": prefix or None,
+            "exclude": exclude_list or None,
+            "include_internal": include_internal
+        }
+    }
+    return _ok({"summary": summary} if counts_only else {"summary": summary, "routes": items})
+
 
 # -------- QUICK DEFAULTS (idempotent) --------
 @bp.post("/ensure-defaults")
