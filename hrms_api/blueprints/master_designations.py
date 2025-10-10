@@ -1,113 +1,228 @@
-from flask import Blueprint, request
-from sqlalchemy import or_
-from hrms_api.extensions import db
-from hrms_api.models.master import Designation, Department, Company
+# hrms_api/blueprints/master_designations.py
+from __future__ import annotations
 
-# add in files where you guard routes
-from hrms_api.common.auth import requires_perms
+from flask import Blueprint, request
 from flask_jwt_extended import jwt_required
+from sqlalchemy import or_, asc, desc
+
+from hrms_api.extensions import db
+from hrms_api.models.master import Designation, Company
+from hrms_api.common.auth import requires_perms  # RBAC
 
 bp = Blueprint("master_designations", __name__, url_prefix="/api/v1/master/designations")
 
+# ---------- uniform envelopes ----------
 def _ok(data=None, status=200, **meta):
     from flask import jsonify
     payload = {"success": True, "data": data}
-    if meta: payload["meta"] = meta
+    if meta:
+        payload["meta"] = meta
     return jsonify(payload), status
 
-def _fail(msg, status=400):
+def _fail(message, status=400, code=None, detail=None):
     from flask import jsonify
-    return jsonify({"success": False, "error": {"message": msg}}), status
+    err = {"message": message}
+    if code: err["code"] = code
+    if detail: err["detail"] = detail
+    return jsonify({"success": False, "error": err}), status
 
-def _page_limit():
+
+# ---------- paging/sorting/search helpers ----------
+DEFAULT_PAGE, DEFAULT_SIZE, MAX_SIZE = 1, 20, 100
+
+def _page_size():
     try:
-        page  = max(int(request.args.get("page", 1)), 1)
-        limit = min(max(int(request.args.get("limit", 20)), 1), 100)
+        page = max(int(request.args.get("page", DEFAULT_PAGE)), 1)
     except Exception:
-        page, limit = 1, 20
-    return page, limit
+        page = DEFAULT_PAGE
+    try:
+        size = int(request.args.get("size", DEFAULT_SIZE))
+        size = max(1, min(size, MAX_SIZE))
+    except Exception:
+        size = DEFAULT_SIZE
+    return page, size
 
+def _sort_params(allowed: dict[str, object]):
+    raw = (request.args.get("sort") or "").strip()
+    out = []
+    if not raw:
+        return out
+    for part in [p.strip() for p in raw.split(",") if p.strip()]:
+        asc_order = True
+        key = part
+        if part.startswith("-"):
+            asc_order = False
+            key = part[1:]
+        col = allowed.get(key)
+        if col is not None:
+            out.append((col, asc_order))
+    return out
+
+def _q_text():
+    q = (request.args.get("q") or "").strip()
+    return q or None
+
+
+# ---------- row shape ----------
 def _row(x: Designation):
     return {
         "id": x.id,
-        "department_id": x.department_id,
-        "department_name": x.department.name if x.department else None,
-        "company_id": x.department.company_id if x.department else None,
+        "company_id": x.company_id,
+        "company_name": x.company.name if x.company else None,
         "name": x.name,
         "is_active": x.is_active,
         "created_at": x.created_at.isoformat() if x.created_at else None,
+        "updated_at": x.updated_at.isoformat() if getattr(x, "updated_at", None) else None,
     }
 
+
+# ---------- routes ----------
 @bp.get("")
+@jwt_required()
+@requires_perms("master.designations.read")
 def list_designations():
-    q = Designation.query.join(Department).join(Company)
-    company_id = request.args.get("companyId", type=int)
-    if company_id: q = q.filter(Department.company_id == company_id)
-    department_id = request.args.get("departmentId", type=int)
-    if department_id: q = q.filter(Designation.department_id == department_id)
-    s = (request.args.get("q") or "").strip().lower()
-    if s:
-        like = f"%{s}%"
-        q = q.filter(or_(Designation.name.ilike(like), Department.name.ilike(like)))
-    is_active = request.args.get("isActive")
+    qry = Designation.query.join(Company, Designation.company_id == Company.id)
+
+    # filters
+    company_id = request.args.get("company_id")
+    if company_id:
+        try:
+            qry = qry.filter(Designation.company_id == int(company_id))
+        except ValueError:
+            return _fail("company_id must be integer", 422)
+
+    is_active = request.args.get("is_active")
     if is_active is not None:
         v = (is_active or "").lower()
-        if v in ("true","1"):  q = q.filter(Designation.is_active.is_(True))
-        if v in ("false","0"): q = q.filter(Designation.is_active.is_(False))
-    page, limit = _page_limit()
-    total = q.count()
-    items = q.order_by(Designation.id.desc()).offset((page-1)*limit).limit(limit).all()
-    return _ok([_row(i) for i in items], page=page, limit=limit, total=total)
+        if v in ("true", "1", "yes"):
+            qry = qry.filter(Designation.is_active.is_(True))
+        elif v in ("false", "0", "no"):
+            qry = qry.filter(Designation.is_active.is_(False))
+        else:
+            return _fail("is_active must be true/false", 422)
 
-@bp.get("/<int:gid>")
-def get_designation(gid: int):
-    x = Designation.query.get(gid)
-    if not x: return _fail("Designation not found", 404)
+    # text search on designation/company name
+    s = _q_text()
+    if s:
+        like = f"%{s}%"
+        qry = qry.filter(or_(Designation.name.ilike(like), Company.name.ilike(like)))
+
+    # sorting
+    allowed = {
+        "id": Designation.id,
+        "name": Designation.name,
+        "company_id": Designation.company_id,
+        "created_at": Designation.created_at,
+        "updated_at": getattr(Designation, "updated_at", Designation.created_at),
+        "is_active": Designation.is_active,
+    }
+    sorts = _sort_params(allowed)
+    for col, asc_order in sorts:
+        qry = qry.order_by(asc(col) if asc_order else desc(col))
+    if not sorts:
+        qry = qry.order_by(asc(Designation.name))  # default
+
+    # paging
+    page, size = _page_size()
+    total = qry.count()
+    items = qry.offset((page - 1) * size).limit(size).all()
+    return _ok([_row(i) for i in items], page=page, size=size, total=total)
+
+
+@bp.get("/<int:desig_id>")
+@jwt_required()
+@requires_perms("master.designations.read")
+def get_designation(desig_id: int):
+    x = Designation.query.get(desig_id)
+    if not x:
+        return _fail("Designation not found", 404)
     return _ok(_row(x))
 
+
 @bp.post("")
+@jwt_required()
 @requires_perms("master.designations.create")
 def create_designation():
     data = request.get_json(silent=True, force=True) or {}
-    department_id = data.get("department_id")
     name = (data.get("name") or "").strip()
-    if not department_id or not name: return _fail("department_id and name are required", 422)
-    if not Department.query.get(department_id): return _fail("Invalid department_id", 422)
-    if Designation.query.filter_by(department_id=department_id, name=name).first():
-        return _fail("Designation already exists for this department", 409)
-    x = Designation(department_id=department_id, name=name, is_active=bool(data.get("is_active", True)))
-    db.session.add(x); db.session.commit()
-    return _ok(_row(x), status=201)
+    company_id = data.get("company_id")
+    is_active = data.get("is_active", True)
 
-@bp.put("/<int:gid>")
+    if not name or not company_id:
+        return _fail("company_id and name are required", 422)
+
+    comp = Company.query.get(company_id)
+    if not comp:
+        return _fail("company_id not found", 404)
+
+    # unique within company (case-insensitive)
+    dup = Designation.query.filter(
+        Designation.company_id == comp.id,
+        db.func.lower(Designation.name) == name.lower()
+    ).first()
+    if dup:
+        return _fail("Designation with same name already exists for this company", 409)
+
+    obj = Designation(company_id=comp.id, name=name, is_active=bool(is_active))
+    db.session.add(obj)
+    db.session.commit()
+    return _ok(_row(obj), 201)
+
+
+@bp.put("/<int:desig_id>")
+@jwt_required()
 @requires_perms("master.designations.update")
-def update_designation(gid: int):
-    x = Designation.query.get(gid)
-    if not x: return _fail("Designation not found", 404)
-    data = request.get_json(silent=True, force=True) or {}
-    if "name" in data:
-        new_name = (data["name"] or "").strip()
-        if not new_name: return _fail("name cannot be empty", 422)
-        dup = Designation.query.filter(
-            Designation.id != gid,
-            Designation.department_id == (data.get("department_id") or x.department_id),
-            Designation.name == new_name
-        ).first()
-        if dup: return _fail("Designation already exists for this department", 409)
-        x.name = new_name
-    if "department_id" in data:
-        did = data["department_id"]
-        if not Department.query.get(did): return _fail("Invalid department_id", 422)
-        x.department_id = did
-    if "is_active" in data: x.is_active = bool(data["is_active"])
-    db.session.commit()
-    return _ok(_row(x))
+def update_designation(desig_id: int):
+    obj = Designation.query.get(desig_id)
+    if not obj:
+        return _fail("Designation not found", 404)
 
-@bp.delete("/<int:gid>")
-@requires_perms("master.designations.delete")
-def delete_designation(gid: int):
-    x = Designation.query.get(gid)
-    if not x: return _fail("Designation not found", 404)
-    x.is_active = False
+    data = request.get_json(silent=True, force=True) or {}
+
+    new_name = obj.name
+    new_company_id = obj.company_id
+    new_is_active = obj.is_active
+
+    if "name" in data:
+        candidate = (data.get("name") or "").strip()
+        if not candidate:
+            return _fail("name cannot be empty", 422)
+        new_name = candidate
+
+    if "company_id" in data:
+        cid = data.get("company_id")
+        comp = Company.query.get(cid)
+        if not comp:
+            return _fail("company_id not found", 404)
+        new_company_id = comp.id
+
+    if "is_active" in data:
+        new_is_active = bool(data.get("is_active"))
+
+    # uniqueness re-check within company
+    dup = Designation.query.filter(
+        Designation.id != obj.id,
+        Designation.company_id == new_company_id,
+        db.func.lower(Designation.name) == new_name.lower(),
+    ).first()
+    if dup:
+        return _fail("Designation with same name already exists for this company", 409)
+
+    obj.company_id = new_company_id
+    obj.name = new_name
+    obj.is_active = new_is_active
     db.session.commit()
-    return _ok({"id": gid, "is_active": False})
+    return _ok(_row(obj))
+
+
+@bp.delete("/<int:desig_id>")
+@jwt_required()
+@requires_perms("master.designations.delete")
+def delete_designation(desig_id: int):
+    obj = Designation.query.get(desig_id)
+    if not obj:
+        return _fail("Designation not found", 404)
+    # Soft delete: mark inactive
+    obj.is_active = False
+    db.session.commit()
+    return _ok({"id": desig_id, "is_active": False})

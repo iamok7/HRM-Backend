@@ -1,146 +1,230 @@
-# apps/backend/hrms_api/blueprints/master_companies.py
+# hrms_api/blueprints/master_companies.py
 from __future__ import annotations
 
-from flask import Blueprint, jsonify, request
-from sqlalchemy.sql import func
-
+from flask import Blueprint, request
+from flask_jwt_extended import jwt_required
+from sqlalchemy import asc, desc, or_
 from hrms_api.extensions import db
-from hrms_api.common.listing import get_page_limit, apply_q_search
-from hrms_api.rbac import require_perm
-
 from hrms_api.models.master import Company
-# If you later switch back to hard delete w/ FK checks, uncomment these:
-# from hrms_api.models.master import Location, Department
-# from hrms_api.models.employee import Employee
+from hrms_api.common.auth import requires_perms  # RBAC
 
 bp = Blueprint("master_companies", __name__, url_prefix="/api/v1/master/companies")
 
+# -------- uniform envelopes --------
+def _ok(data=None, status=200, **meta):
+    from flask import jsonify
+    payload = {"success": True, "data": data}
+    if meta:
+        payload["meta"] = meta
+    return jsonify(payload), status
 
-# ---------- helpers ----------
+def _fail(message, status=400, code=None, detail=None):
+    from flask import jsonify
+    err = {"message": message}
+    if code: err["code"] = code
+    if detail: err["detail"] = detail
+    return jsonify({"success": False, "error": err}), status
 
-def _row(c: Company) -> dict:
-    """Serialize a Company model to API shape."""
+# -------- paging/sorting/search helpers --------
+DEFAULT_PAGE, DEFAULT_SIZE, MAX_SIZE = 1, 20, 100
+
+def _page_size():
+    try:
+        page = max(int(request.args.get("page", DEFAULT_PAGE)), 1)
+    except Exception:
+        page = DEFAULT_PAGE
+    try:
+        size = int(request.args.get("size", DEFAULT_SIZE))
+        size = max(1, min(size, MAX_SIZE))
+    except Exception:
+        size = DEFAULT_SIZE
+    return page, size
+
+def _sort_params(allowed: dict[str, object]):
+    raw = (request.args.get("sort") or "").strip()
+    out = []
+    if not raw:
+        return out
+    for part in [p.strip() for p in raw.split(",") if p.strip()]:
+        asc_order = True
+        key = part
+        if part.startswith("-"):
+            asc_order = False
+            key = part[1:]
+        col = allowed.get(key)
+        if col is not None:
+            out.append((col, asc_order))
+    return out
+
+def _q_text():
+    q = (request.args.get("q") or "").strip()
+    return q or None
+
+# -------- row shape --------
+def _row(x: Company):
+    # Optional fields handled safely via getattr (e.g., code, gst_no, address)
     return {
-        "id": c.id,
-        "code": c.code,
-        "name": c.name,
-        "is_active": bool(getattr(c, "is_active", True)),
-        "created_at": getattr(c, "created_at", None).isoformat()
-        if getattr(c, "created_at", None) else None,
-        # include deleted_at if you track soft deletes
-        "deleted_at": getattr(c, "deleted_at", None).isoformat()
-        if getattr(c, "deleted_at", None) else None,
+        "id": x.id,
+        "name": x.name,
+        "code": getattr(x, "code", None),
+        "gst_no": getattr(x, "gst_no", None),
+        "address": getattr(x, "address", None),
+        "is_active": getattr(x, "is_active", True),
+        "created_at": x.created_at.isoformat() if getattr(x, "created_at", None) else None,
+        "updated_at": x.updated_at.isoformat() if getattr(x, "updated_at", None) else None,
     }
 
-
-def _soft_delete_company(c: Company) -> None:
-    """
-    Soft-delete that works even if Company doesn't implement soft_delete().
-    Prefer using the model's soft_delete() if present.
-    """
-    if hasattr(c, "soft_delete") and callable(c.soft_delete):
-        c.soft_delete()
-        return
-    # Fallback: mark inactive + timestamp if column exists
-    if hasattr(c, "is_active"):
-        c.is_active = False
-    if hasattr(c, "deleted_at"):
-        c.deleted_at = func.now()
-
-
-# ---------- routes ----------
-
+# -------- routes --------
 @bp.get("")
-@require_perm("master.companies.read")
-def companies_list():
-    q = Company.query
-    q = apply_q_search(q, Company.code, Company.name)
+@jwt_required()
+@requires_perms("master.companies.read")
+def list_companies():
+    qry = Company.query
 
-    page, limit = get_page_limit()
-    total = q.count()
-    items = (
-        q.order_by(Company.id.asc())
-         .offset((page - 1) * limit)
-         .limit(limit)
-         .all()
-    )
+    # filter: is_active
+    is_active = request.args.get("is_active")
+    if is_active is not None:
+        v = (is_active or "").lower()
+        if v in ("true", "1", "yes"):
+            qry = qry.filter(Company.is_active.is_(True))
+        elif v in ("false", "0", "no"):
+            qry = qry.filter(Company.is_active.is_(False))
+        else:
+            return _fail("is_active must be true/false", 422)
 
-    return jsonify({
-        "success": True,
-        "data": [_row(c) for c in items],
-        "meta": {"page": page, "limit": limit, "total": total},
-    })
+    # text search on name (+ optional code/gst_no)
+    s = _q_text()
+    if s:
+        like = f"%{s}%"
+        conds = [Company.name.ilike(like)]
+        if hasattr(Company, "code"):
+            conds.append(Company.code.ilike(like))
+        if hasattr(Company, "gst_no"):
+            conds.append(Company.gst_no.ilike(like))
+        qry = qry.filter(or_(*conds))
 
+    # sorting
+    allowed = {
+        "id": Company.id,
+        "name": Company.name,
+        "created_at": getattr(Company, "created_at", Company.id),
+        "updated_at": getattr(Company, "updated_at", Company.id),
+        "is_active": getattr(Company, "is_active", None),
+    }
+    if hasattr(Company, "code"):       allowed["code"] = Company.code
+    if hasattr(Company, "gst_no"):     allowed["gst_no"] = Company.gst_no
 
-@bp.get("/<int:cid>")
-@require_perm("master.companies.read")
-def companies_get(cid: int):
-    c = Company.query.get_or_404(cid)
-    return jsonify({"success": True, "data": _row(c)})
+    sorts = _sort_params(allowed)
+    for col, asc_order in sorts:
+        qry = qry.order_by(asc(col) if asc_order else desc(col))
+    if not sorts:
+        qry = qry.order_by(asc(Company.name))  # default
 
+    # paging
+    page, size = _page_size()
+    total = qry.count()
+    items = qry.offset((page - 1) * size).limit(size).all()
+    return _ok([_row(i) for i in items], page=page, size=size, total=total)
+
+@bp.get("/<int:comp_id>")
+@jwt_required()
+@requires_perms("master.companies.read")
+def get_company(comp_id: int):
+    x = Company.query.get(comp_id)
+    if not x:
+        return _fail("Company not found", 404)
+    return _ok(_row(x))
 
 @bp.post("")
-@require_perm("master.companies.create")
-def companies_create():
-    data = request.get_json(force=True) or {}
-    code = (data.get("code") or "").strip()
+@jwt_required()
+@requires_perms("master.companies.create")
+def create_company():
+    data = request.get_json(silent=True, force=True) or {}
     name = (data.get("name") or "").strip()
+    is_active = data.get("is_active", True)
 
-    if not code or not name:
-        return jsonify({
-            "success": False,
-            "error": {"message": "code and name are required"}
-        }), 422
+    if not name:
+        return _fail("name is required", 422)
 
-    if Company.query.filter_by(code=code).first():
-        return jsonify({
-            "success": False,
-            "error": {"message": "code already exists"}
-        }), 409
+    # global uniqueness on name (case-insensitive)
+    dup = Company.query.filter(db.func.lower(Company.name) == name.lower()).first()
+    if dup:
+        return _fail("Company with same name already exists", 409)
 
-    c = Company(
-        code=code,
-        name=name,
-        is_active=bool(data.get("is_active", True))
-    )
-    db.session.add(c)
+    obj = Company(name=name)
+    if hasattr(Company, "is_active"): obj.is_active = bool(is_active)
+    # optional fields
+    if hasattr(Company, "code") and data.get("code"):
+        obj.code = (data.get("code") or "").strip()
+    if hasattr(Company, "gst_no") and data.get("gst_no"):
+        obj.gst_no = (data.get("gst_no") or "").strip()
+    if hasattr(Company, "address") and data.get("address"):
+        obj.address = (data.get("address") or "").strip()
+
+    db.session.add(obj)
     db.session.commit()
-    return jsonify({"success": True, "data": _row(c)}), 201
+    return _ok(_row(obj), 201)
 
+@bp.put("/<int:comp_id>")
+@jwt_required()
+@requires_perms("master.companies.update")
+def update_company(comp_id: int):
+    obj = Company.query.get(comp_id)
+    if not obj:
+        return _fail("Company not found", 404)
 
-@bp.put("/<int:cid>")
-@require_perm("master.companies.update")
-def companies_update(cid: int):
-    c = Company.query.get_or_404(cid)
-    data = request.get_json(force=True) or {}
+    data = request.get_json(silent=True, force=True) or {}
 
-    if "code" in data:
-        new_code = (data.get("code") or "").strip()
-        if not new_code:
-            return jsonify({"success": False, "error": {"message": "code cannot be empty"}}), 422
-        # ensure uniqueness
-        if Company.query.filter(Company.id != cid, Company.code == new_code).first():
-            return jsonify({"success": False, "error": {"message": "code already exists"}}), 409
-        c.code = new_code
-
+    # name
     if "name" in data:
-        new_name = (data.get("name") or "").strip()
-        if not new_name:
-            return jsonify({"success": False, "error": {"message": "name cannot be empty"}}), 422
-        c.name = new_name
+        candidate = (data.get("name") or "").strip()
+        if not candidate:
+            return _fail("name cannot be empty", 422)
+        # check uniqueness (case-insensitive)
+        dup = Company.query.filter(
+            Company.id != obj.id,
+            db.func.lower(Company.name) == candidate.lower()
+        ).first()
+        if dup:
+            return _fail("Company with same name already exists", 409)
+        obj.name = candidate
 
-    if "is_active" in data:
-        c.is_active = bool(data.get("is_active"))
+    # is_active
+    if "is_active" in data and hasattr(Company, "is_active"):
+        obj.is_active = bool(data.get("is_active"))
+
+    # optional fields
+    if hasattr(Company, "code") and "code" in data:
+        val = (data.get("code") or "").strip()
+        obj.code = val or None
+    if hasattr(Company, "gst_no") and "gst_no" in data:
+        val = (data.get("gst_no") or "").strip()
+        obj.gst_no = val or None
+    if hasattr(Company, "address") and "address" in data:
+        val = (data.get("address") or "").strip()
+        obj.address = val or None
 
     db.session.commit()
-    return jsonify({"success": True, "data": _row(c)})
+    return _ok(_row(obj))
 
+@bp.delete("/<int:comp_id>")
+@jwt_required()
+@requires_perms("master.companies.delete")
+def delete_company(comp_id: int):
+    obj = Company.query.get(comp_id)
+    if not obj:
+        return _fail("Company not found", 404)
 
-# Soft delete variant (keeps history, avoids FK explosions)
-@bp.delete("/<int:company_id>")
-@require_perm("master.companies.delete")
-def companies_delete(company_id: int):
-    c = Company.query.get_or_404(company_id)
-    _soft_delete_company(c)
-    db.session.commit()
-    return jsonify({"success": True, "data": {"id": company_id, "soft_deleted": True}})
+    # Soft delete: mark inactive if field exists; else hard delete fallback
+    if hasattr(Company, "is_active"):
+        obj.is_active = False
+        db.session.commit()
+        return _ok({"id": comp_id, "is_active": False})
+    else:
+        try:
+            db.session.delete(obj)
+            db.session.commit()
+        except Exception as e:
+            db.session.rollback()
+            return _fail("Cannot delete: referenced by other records", 409, detail=str(e))
+        return _ok({"deleted": True, "id": comp_id})

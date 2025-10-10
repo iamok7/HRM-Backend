@@ -1,243 +1,307 @@
-from datetime import datetime, date, time, timedelta
-import calendar as pycal
+# hrms_api/blueprints/attendance_punches.py
+from __future__ import annotations
+from datetime import datetime, date
+from typing import Optional, List, Dict, Any
+
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
-from sqlalchemy import or_, desc
-from hrms_api.common.auth import requires_roles
+from sqlalchemy import and_, asc, desc, or_
+from sqlalchemy.exc import SQLAlchemyError
+
 from hrms_api.extensions import db
-
-from hrms_api.models.attendance_punch import AttendancePunch
 from hrms_api.models.employee import Employee
-from hrms_api.models.attendance import Holiday, WeeklyOffRule, Shift
-from hrms_api.models.attendance_assignment import EmployeeShiftAssignment
+from hrms_api.models.attendance_punch import AttendancePunch
 
-bp = Blueprint("attendance_punches", __name__, url_prefix="/api/v1/attendance")
+# permissions – prefer perms, fall back to role if needed
+try:
+    from hrms_api.common.auth import requires_perms
+except Exception:
+    def requires_perms(_):  # noop fallback
+        def _wrap(fn): return fn
+        return _wrap
 
-from hrms_api.common.auth import requires_perms
+try:
+    from hrms_api.common.auth import requires_roles
+except Exception:
+    def requires_roles(_):
+        def _wrap(fn): return fn
+        return _wrap
 
-# ------------------- helpers -------------------
+bp = Blueprint("attendance_punches", __name__, url_prefix="/api/v1/attendance/punches")
+
+# ---------- envelopes ----------
 def _ok(data=None, status=200, **meta):
     payload = {"success": True, "data": data}
     if meta: payload["meta"] = meta
     return jsonify(payload), status
 
-def _fail(msg, status=400):
-    return jsonify({"success": False, "error": {"message": msg}}), status
+def _fail(msg, status=400, code=None, detail=None):
+    err = {"message": msg}
+    if code: err["code"] = code
+    if detail: err["detail"] = detail
+    return jsonify({"success": False, "error": err}), status
 
-def _parse_dt(s):
+# ---------- helpers ----------
+_DT_FORMATS = (
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M",
+)
+
+def _parse_ts(s: str | None):
     if not s: return None
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ"):
+    s = s.strip()
+    # prefer ISO
+    try:
+        return datetime.fromisoformat(s.replace(" ", "T"))
+    except Exception:
+        pass
+    for fmt in _DT_FORMATS:
         try: return datetime.strptime(s, fmt)
         except Exception: pass
     return None
 
-def _parse_d(s):
-    if not s: return None
-    for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
-        try: return datetime.strptime(s, fmt).date()
-        except Exception: pass
+def _as_int(val, field) -> Optional[int]:
+    if val in (None, "", "null"): return None
+    try:
+        return int(val)
+    except Exception:
+        raise ValueError(f"{field} must be integer")
+
+def _as_bool(val, field):
+    if val is None: return None
+    v = str(val).lower()
+    if v in ("true","1","yes"):  return True
+    if v in ("false","0","no"):  return False
+    raise ValueError(f"{field} must be true/false")
+
+def _normalize_kind(v: Any) -> Optional[str]:
+    if v is None: return None
+    s = str(v).strip().lower()
+    if s in ("in", "out"): return s
     return None
 
-def _serialize_punch(p):
+def _page_size():
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+    except Exception:
+        page = 1
+    raw = request.args.get("size", request.args.get("limit", 20))
+    try:
+        size = max(min(int(raw), 100), 1)
+    except Exception:
+        size = 20
+    return page, size
+
+def _recompute_after(emp_id: int, day: date):
+    try:
+        from hrms_api.services.attendance_engine import recompute_daily
+    except Exception:
+        recompute_daily = None
+    if recompute_daily:
+        try:
+            recompute_daily(emp_id, day)
+        except Exception:
+            # don't fail the API because recompute failed
+            pass
+
+def _row(p: AttendancePunch):
     return {
         "id": p.id,
         "employee_id": p.employee_id,
-        "ts": p.ts.isoformat(sep=" "),
+        "ts": p.ts.isoformat() if p.ts else None,
         "kind": p.kind,
         "source": getattr(p, "source", None),
         "note": getattr(p, "note", None),
+        "is_active": getattr(p, "is_active", True),
+        "created_at": getattr(p, "created_at", None).isoformat() if getattr(p, "created_at", None) else None,
+        "updated_at": getattr(p, "updated_at", None).isoformat() if getattr(p, "updated_at", None) else None,
     }
 
-# ------------------- list/create/delete punches -------------------
-@bp.get("/punches")
+# ---------- routes ----------
+
+@bp.get("")
 @jwt_required()
+@requires_perms("attendance.punch.read")
 def list_punches():
-    emp_id = request.args.get("employeeId", type=int) or request.args.get("employee_id", type=int)
-    if not emp_id:
-        return _fail("employeeId is required", 422)
+    """
+    GET /api/v1/attendance/punches
+      ?employee_id|employeeId
+      &from|date_from=YYYY-MM-DD
+      &to|date_to=YYYY-MM-DD
+      &kind=in|out
+      &source=device|manual|*
+      &q=note-text
+      &is_active=true|false   (if column exists)
+      &page=1&size=20&sort=ts,-created_at
+    """
+    q = AttendancePunch.query
 
-    page  = request.args.get("page", type=int, default=1)
-    limit = request.args.get("limit", type=int, default=50)
+    # filters
+    try:
+        eid = _as_int(request.args.get("employee_id") or request.args.get("employeeId"), "employee_id")
+    except ValueError as ex:
+        return _fail(str(ex), 422)
+    if eid:
+        q = q.filter(AttendancePunch.employee_id == eid)
 
-    q = AttendancePunch.query.filter_by(employee_id=emp_id).order_by(desc(AttendancePunch.ts))
-    items = q.limit(limit).offset((page - 1) * limit).all()
+    dfrom = request.args.get("from") or request.args.get("date_from")
+    dto   = request.args.get("to")   or request.args.get("date_to")
+    df = datetime.strptime(dfrom, "%Y-%m-%d").date() if dfrom else None
+    dt = datetime.strptime(dto, "%Y-%m-%d").date()   if dto   else None
+    if df:
+        q = q.filter(AttendancePunch.ts >= datetime.combine(df, datetime.min.time()))
+    if dt:
+        q = q.filter(AttendancePunch.ts <= datetime.combine(dt, datetime.max.time()))
+
+    k = _normalize_kind(request.args.get("kind"))
+    if k:
+        q = q.filter(AttendancePunch.kind == k)
+
+    src = (request.args.get("source") or "").strip().lower()
+    if src:
+        if hasattr(AttendancePunch, "source"):
+            q = q.filter(AttendancePunch.source == src)
+
+    s = (request.args.get("q") or "").strip()
+    if s and hasattr(AttendancePunch, "note"):
+        like = f"%{s}%"
+        q = q.filter(AttendancePunch.note.ilike(like))
+
+    # is_active flag (if present)
+    if "is_active" in request.args and hasattr(AttendancePunch, "is_active"):
+        try:
+            b = _as_bool(request.args.get("is_active"), "is_active")
+        except ValueError as ex:
+            return _fail(str(ex), 422)
+        if b is True:
+            q = q.filter(AttendancePunch.is_active.is_(True))
+        elif b is False:
+            q = q.filter(AttendancePunch.is_active.is_(False))
+
+    # sorting
+    allowed = {
+        "id": AttendancePunch.id,
+        "ts": AttendancePunch.ts,
+        "created_at": getattr(AttendancePunch, "created_at", AttendancePunch.id),
+        "updated_at": getattr(AttendancePunch, "updated_at", AttendancePunch.id),
+        "employee_id": AttendancePunch.employee_id,
+        "kind": AttendancePunch.kind,
+    }
+    raw_sort = (request.args.get("sort") or "").strip()
+    if raw_sort:
+        for part in [p.strip() for p in raw_sort.split(",") if p.strip()]:
+            asc_order = True
+            key = part
+            if part.startswith("-"):
+                asc_order = False
+                key = part[1:]
+            col = allowed.get(key)
+            if col is not None:
+                q = q.order_by(asc(col) if asc_order else desc(col))
+    else:
+        q = q.order_by(desc(AttendancePunch.ts))
+
+    # paging
+    page, size = _page_size()
     total = q.count()
+    items = q.offset((page - 1) * size).limit(size).all()
+    return _ok([_row(i) for i in items], page=page, size=size, total=total)
 
-    return _ok({
-        "items": [_serialize_punch(p) for p in items],
-        "pagination": {"page": page, "limit": limit, "total": total}
-    })
+@bp.get("/<int:punch_id>")
+@jwt_required()
+@requires_perms("attendance.punch.read")
+def get_punch(punch_id: int):
+    p = AttendancePunch.query.get(punch_id)
+    if not p: return _fail("Punch not found", 404)
+    return _ok(_row(p))
 
-@bp.post("/punches")
+@bp.post("")
+@jwt_required()
 @requires_perms("attendance.punch.create")
 def create_punch():
+    """
+    Body:
+    {
+      "employee_id": 123,            // or "123" (coerced)
+      "ts": "2025-10-10 09:00",      // or ISO 8601
+      "kind": "in" | "out",
+      "source": "manual",            // optional
+      "note": "late entry"           // optional
+    }
+    """
     d = request.get_json(silent=True, force=True) or {}
-    eid  = d.get("employee_id")
-    kind = (d.get("kind") or "").lower()
-    ts   = _parse_dt(d.get("ts")) or datetime.now()
-    src  = (d.get("source") or "api").lower()
-    note = d.get("note")
+    try:
+        emp_id = _as_int(d.get("employee_id"), "employee_id")
+    except ValueError as ex:
+        return _fail(str(ex), 422)
 
-    if not (eid and kind in ("in","out")):
-        return _fail("employee_id and kind ('in'|'out') are required", 422)
-    if not Employee.query.get(eid):
+    ts = _parse_ts(d.get("ts"))
+    kind = _normalize_kind(d.get("kind"))
+    source = (d.get("source") or "manual").strip().lower()
+    note = (d.get("note") or "").strip() or None
+
+    if not (emp_id and ts and kind):
+        return _fail("employee_id, ts and kind are required", 422)
+
+    if not Employee.query.get(emp_id):
         return _fail("Employee not found", 404)
 
-    p = AttendancePunch(employee_id=eid, ts=ts, kind=kind, source=src, note=note)
-    db.session.add(p); db.session.commit()
-    return _ok(_serialize_punch(p), status=201)
+    # duplicate check (same as import)
+    dup = AttendancePunch.query.filter(
+        and_(
+            AttendancePunch.employee_id == emp_id,
+            AttendancePunch.ts == ts,
+            AttendancePunch.kind == kind,
+        )
+    ).first()
+    if dup:
+        return _fail("Duplicate punch", 409)
 
-@bp.delete("/punches/<int:pid>")
-@requires_roles("admin")
-def delete_punch(pid: int):
-    p = AttendancePunch.query.get(pid)
-    if not p: return _fail("Punch not found", 404)
-    db.session.delete(p); db.session.commit()
-    return _ok({"id": pid, "deleted": True})
+    p = AttendancePunch(employee_id=emp_id, ts=ts, kind=kind)
+    if hasattr(AttendancePunch, "source"): p.source = source
+    if hasattr(AttendancePunch, "note"):   p.note = note
 
-# ------------------- daily status -------------------
-def _week_in_month(d: date) -> int:
-    return (d.day - 1)//7 + 1
+    try:
+        db.session.add(p)
+        db.session.commit()
+    except SQLAlchemyError as e:
+        db.session.rollback()
+        return _fail("Database error while creating punch", 500, detail=str(e))
 
-def _rules_for(emp: Employee):
-    rules = WeeklyOffRule.query.filter(
-        WeeklyOffRule.company_id == emp.company_id,
-        or_(WeeklyOffRule.location_id == emp.location_id, WeeklyOffRule.location_id.is_(None))
-    ).all()
-    bywd = {i: [] for i in range(7)}
-    for r in rules:
-        weeks = set()
-        if getattr(r, "is_alternate", False) and getattr(r, "week_numbers", None):
-            try:
-                weeks = {int(x.strip()) for x in r.week_numbers.split(",") if x.strip()}
-            except Exception:
-                weeks = set()
-        bywd[r.weekday].append((bool(getattr(r, "is_alternate", False)), weeks))
-    return bywd
+    # recompute for that day
+    _recompute_after(emp_id, ts.date())
 
-def _shift_on(emp_id: int, d: date):
-    rec = (
-        db.session.query(EmployeeShiftAssignment, Shift)
-        .join(Shift, EmployeeShiftAssignment.shift_id == Shift.id)
-        .filter(
-            EmployeeShiftAssignment.employee_id == emp_id,
-            or_(EmployeeShiftAssignment.end_date == None, EmployeeShiftAssignment.end_date >= d),  # noqa
-            EmployeeShiftAssignment.start_date <= d
-        ).order_by(EmployeeShiftAssignment.start_date.desc()).first()
-    )
-    if not rec: return None
-    _, s = rec
-    return {
-        "id": s.id, "code": s.code, "name": s.name,
-        "start_time": s.start_time, "end_time": s.end_time,
-        "break_minutes": s.break_minutes, "grace_minutes": s.grace_minutes,
-        "is_night": s.is_night
-    }
+    return _ok(_row(p), 201)
 
-@bp.get("/daily-status")
+@bp.delete("/<int:punch_id>")
 @jwt_required()
-def daily_status():
-    emp_id = request.args.get("employeeId", type=int)
-    dstr   = request.args.get("date")
-    if not (emp_id and dstr): return _fail("employeeId and date are required", 422)
-    day = _parse_d(dstr)
-    if not day: return _fail("date must be YYYY-MM-DD", 422)
+@requires_perms("attendance.punch.delete")
+def delete_punch(punch_id: int):
+    p = AttendancePunch.query.get(punch_id)
+    if not p: return _fail("Punch not found", 404)
 
-    emp = Employee.query.get(emp_id)
-    if not emp: return _fail("Employee not found", 404)
+    the_day = p.ts.date() if p.ts else None
+    emp_id = p.employee_id
 
-    # Holiday?
-    hol = Holiday.query.filter(
-        Holiday.company_id == emp.company_id,
-        Holiday.date == day,
-        or_(Holiday.location_id == emp.location_id, Holiday.location_id.is_(None))
-    ).order_by(Holiday.location_id.desc().nullslast()).first()
-    is_holiday = bool(hol)
-    holiday_name = hol.name if hol else None
+    # soft delete if supported; otherwise hard delete
+    if hasattr(AttendancePunch, "is_active"):
+        p.is_active = False
+        try:
+            db.session.commit()
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            return _fail("Database error while deleting punch", 500, detail=str(e))
+    else:
+        try:
+            db.session.delete(p)
+            db.session.commit()
+        except SQLAlchemyError as e:
+            db.session.rollback()
+            return _fail("Database error while deleting punch", 500, detail=str(e))
 
-    # Weekly off?
-    bywd = _rules_for(emp)
-    wd = day.weekday()
-    is_wo = False
-    for is_alt, weeks in bywd.get(wd, []):
-        if not is_alt: is_wo = True; break
-        if _week_in_month(day) in weeks: is_wo = True; break
+    if emp_id and the_day:
+        _recompute_after(emp_id, the_day)
 
-    # Shift for the day
-    sh = _shift_on(emp_id, day)  # may be None
-
-    # Logical punch span (handles night shift)
-    span_start = datetime.combine(day, time.min)
-    span_end   = datetime.combine(day, time.max)
-    if sh and sh["is_night"]:
-        span_end = span_end + timedelta(days=1)
-
-    punches = AttendancePunch.query.filter(
-        AttendancePunch.employee_id == emp_id,
-        AttendancePunch.ts >= span_start,
-        AttendancePunch.ts <= span_end
-    ).order_by(AttendancePunch.ts.asc()).all()
-
-    serial = [{"id":p.id, "ts":p.ts.isoformat(sep=' '), "kind":p.kind, "source":getattr(p, "source", None)} for p in punches]
-    first_in = next((p.ts for p in punches if p.kind == "in"), None)
-    last_out = next((p.ts for p in reversed(punches) if p.kind == "out"), None)
-
-    shift_info = None
-    late_min = early_min = work_min = None
-    status = "Off"
-    remarks = []
-
-    if sh:
-        shift_info = {
-            "id": sh["id"], "code": sh["code"], "name": sh["name"],
-            "start_time": sh["start_time"].strftime("%H:%M:%S"),
-            "end_time": sh["end_time"].strftime("%H:%M:%S"),
-            "break_minutes": sh["break_minutes"], "grace_minutes": sh["grace_minutes"],
-            "is_night": sh["is_night"]
-        }
-
-        st_dt = datetime.combine(day, sh["start_time"])
-        et_day = day if not sh["is_night"] else day + timedelta(days=1)
-        et_dt = datetime.combine(et_day, sh["end_time"])
-
-        if first_in and last_out:
-            raw_min = int((last_out - first_in).total_seconds() // 60)
-            work_min = max(raw_min - int(sh["break_minutes"] or 0), 0)
-            if first_in > st_dt + timedelta(minutes=int(sh["grace_minutes"] or 0)):
-                late_min = int((first_in - st_dt).total_seconds() // 60)
-                remarks.append(f"Late by {late_min}m")
-            if last_out < et_dt:
-                early_min = int((et_dt - last_out).total_seconds() // 60)
-                remarks.append(f"Early by {early_min}m")
-            status = "Present"
-        elif first_in or last_out:
-            status = "Partial"
-            remarks.append("Only one punch")
-        else:
-            status = "Absent"
-
-    # Overrides
-    if is_wo:
-        status = "WeeklyOff"; remarks.append("Weekly Off")
-    if is_holiday:
-        status = "Holiday";   remarks.append(holiday_name or "Holiday")
-    if not sh and not (is_wo or is_holiday):
-        status = "NoShift"
-
-    return _ok({
-        "employee_id": emp_id,
-        "date": day.isoformat(),
-        "weekday": wd,
-        "is_weekly_off": is_wo,
-        "is_holiday": is_holiday,
-        "holiday_name": holiday_name,
-        "shift": shift_info,
-        "punches": serial,
-        "first_in": first_in.isoformat(sep=' ') if first_in else None,
-        "last_out": last_out.isoformat(sep=' ') if last_out else None,
-        "work_minutes": work_min,
-        "late_minutes": late_min,
-        "early_minutes": early_min,
-        "status": status,
-        "remarks": ", ".join(remarks) if remarks else None
-    })
+    return _ok({"id": punch_id, "deleted": True})

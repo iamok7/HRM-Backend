@@ -66,6 +66,7 @@ def create_app():
     from hrms_api.blueprints.attendance_missed_punch import bp as attendance_missed_bp
     from hrms_api.blueprints.security import bp as security_bp
     from .rbac import bp as rbac_bp
+    from hrms_api.common.errors import bp_errors
 
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
@@ -90,7 +91,7 @@ def create_app():
     app.register_blueprint(attendance_missed_bp)
     app.register_blueprint(security_bp)
     app.register_blueprint(rbac_bp)
-
+    app.register_blueprint(bp_errors)
     
     # in hrms_api/__init__.py (inside create_app, after app.register_blueprint(rbac_bp))
     with app.app_context():

@@ -36,6 +36,7 @@ def _GUARD(fn):
 
 bp = Blueprint("attendance_punch_import", __name__, url_prefix="/api/v1/attendance/punches")
 
+# ---------- envelopes ----------
 def _ok(data=None, status=200):
     return jsonify({"success": True, "data": data}), status
 
@@ -44,7 +45,7 @@ def _fail(msg, status=400, errors: List[Dict[str, Any]] | None = None):
     if errors: payload["error"]["rows"] = errors
     return jsonify(payload), status
 
-# -------- parsing helpers --------
+# ---------- parsing helpers ----------
 _DT_FORMATS = (
     "%Y-%m-%d %H:%M:%S",
     "%Y-%m-%d %H:%M",
@@ -63,6 +64,19 @@ def _parse_ts(s: str | None):
     for fmt in _DT_FORMATS:
         try: return datetime.strptime(s, fmt)
         except Exception: pass
+    return None
+
+def _as_int(val, field) -> Optional[int]:
+    if val in (None, "", "null"): return None
+    try:
+        return int(val)
+    except Exception:
+        raise ValueError(f"{field} must be integer")
+
+def _normalize_kind(v: Any) -> Optional[str]:
+    if v is None: return None
+    s = str(v).strip().lower()
+    if s in ("in", "out"): return s
     return None
 
 def _get_rows_from_request() -> Tuple[List[Dict[str, Any]], str]:
@@ -87,52 +101,13 @@ def _get_rows_from_request() -> Tuple[List[Dict[str, Any]], str]:
             rows = []
         return rows, "json"
 
-def _normalize_kind(v: Any) -> Optional[str]:
-    if v is None: return None
-    s = str(v).strip().lower()
-    if s in ("in", "i"): return "in"
-    if s in ("out", "o"): return "out"
-    return None
-
-def _normalize_row(r: Dict[str, Any]) -> Dict[str, Any]:
-    """Map aliases, trim, and coerce types. Supports employee_id OR employee_code (code/emp_code)."""
-    employee_id = r.get("employee_id") or r.get("employeeId")
-    employee_code = r.get("employee_code") or r.get("code") or r.get("emp_code")
-    kind = _normalize_kind(r.get("kind"))
-    ts = r.get("ts") or r.get("timestamp")
-    note = r.get("note")
-    source = (r.get("source") or "device").strip().lower()
-
-    try:
-        employee_id = int(employee_id) if employee_id not in (None, "", "null") else None
-    except Exception:
-        employee_id = None
-
-    ts_parsed = _parse_ts(str(ts)) if ts else None
-    return {
-        "employee_id": employee_id,
-        "employee_code": (str(employee_code).strip() if employee_code else None),
-        "kind": kind,
-        "ts": ts_parsed,
-        "note": note,
-        "source": source if source else "device",
-    }
-
-def _exists(emp_id: int, ts: datetime, kind: str) -> bool:
-    return db.session.query(AttendancePunch.id).filter(
-        and_(
-            AttendancePunch.employee_id == emp_id,
-            AttendancePunch.kind == kind,
-            AttendancePunch.ts == ts,
-        )
-    ).first() is not None
-
-def _code_columns():
-    # prefer explicit 'employee_code' then 'code' then 'emp_code'
+# ---------- employee code → id mapping (fast, done once per call) ----------
+def _code_columns() -> List[str]:
+    # check common code columns on Employee (ordered by preference)
     cols = []
-    for c in ("employee_code", "code", "emp_code"):
+    for c in ("code", "emp_code", "employee_code"):
         if hasattr(Employee, c):
-            cols.append(getattr(Employee, c))
+            cols.append(c)
     return cols
 
 def _make_code_map() -> dict[str, int]:
@@ -140,15 +115,15 @@ def _make_code_map() -> dict[str, int]:
     if not cols:
         return {}
     primary = cols[0]
-    data = db.session.query(Employee.id, primary).all()
+    data = db.session.query(Employee.id, getattr(Employee, primary)).all()
     mapping = {}
     for eid, code in data:
         if code:
             mapping[str(code).strip()] = eid
     return mapping
 
+# ---------- recompute hook (safe no-op if service missing) ----------
 def _recompute_after_commit(inserted: List[AttendancePunch]):
-    # Gather (emp_id -> set(days))
     by_emp: dict[int, set[date]] = defaultdict(set)
     for p in inserted:
         try:
@@ -157,7 +132,6 @@ def _recompute_after_commit(inserted: List[AttendancePunch]):
             continue
     if not by_emp:
         return
-    # Lazy import so startup never breaks if service missing
     try:
         from hrms_api.services.attendance_engine import recompute_daily
     except Exception:
@@ -172,7 +146,38 @@ def _recompute_after_commit(inserted: List[AttendancePunch]):
             except Exception as e:
                 log.exception("[punch-import] recompute failed emp=%s day=%s: %s", emp_id, d, e)
 
-# -------- endpoint --------
+# ---------- normalization per row ----------
+def _normalize_row(raw: Dict[str, Any]) -> Dict[str, Any]:
+    # aliases
+    emp_id = raw.get("employee_id") or raw.get("employeeId")
+    emp_code = (raw.get("employee_code")
+                or raw.get("code")
+                or raw.get("emp_code"))
+    ts = raw.get("ts") or raw.get("timestamp")
+    kind = raw.get("kind")
+    source = raw.get("source", "device")
+    note = raw.get("note")
+
+    # coerce & clean
+    try:
+        emp_id = _as_int(emp_id, "employee_id")
+    except ValueError:
+        emp_id = None
+
+    ts_dt = _parse_ts(ts)
+    k = _normalize_kind(kind)
+
+    return {
+        "employee_id": emp_id,
+        "employee_code": str(emp_code).strip() if emp_code is not None else None,
+        "ts": ts_dt,
+        "kind": k,
+        "source": (str(source).strip().lower() if source else "device"),
+        "note": (str(note).strip() if note else None),
+        "raw": raw,
+    }
+
+# ---------- endpoint ----------
 @bp.post("/import")
 @jwt_required()
 @_GUARD
@@ -218,58 +223,86 @@ def import_punches():
             errors.append({"row": idx, "error": "employee_id missing (or code not found)"})
             continue
         if not Employee.query.get(emp_id):
-            errors.append({"row": idx, "employee_id": emp_id, "error": "employee not found"})
+            errors.append({"row": idx, "error": f"employee_id not found: {emp_id}"})
             continue
         if not n["ts"]:
-            errors.append({"row": idx, "error": "ts missing/invalid"})
+            errors.append({"row": idx, "error": "invalid ts (timestamp) format"})
             continue
-        if n["kind"] not in ("in", "out"):
+        if not n["kind"]:
             errors.append({"row": idx, "error": "kind must be 'in' or 'out'"})
             continue
 
         # duplicate check
-        if _exists(emp_id, n["ts"], n["kind"]):
-            duplicates += 1
-            if on_dup == "error":
-                errors.append({"row": idx, "error": "duplicate (employee_id, ts, kind) exists"})
-            continue
+        existing = AttendancePunch.query.filter(
+            and_(
+                AttendancePunch.employee_id == emp_id,
+                AttendancePunch.ts == n["ts"],
+                AttendancePunch.kind == n["kind"],
+            )
+        ).first()
+        if existing:
+            if on_dup == "skip":
+                duplicates += 1
+                continue
+            else:  # error policy
+                errors.append({"row": idx, "error": "duplicate punch"})
+                continue
 
-        to_create.append(AttendancePunch(
+        p = AttendancePunch(
             employee_id=emp_id,
             ts=n["ts"],
             kind=n["kind"],
-            source=n.get("source") or "device",
-            note=n.get("note")
-        ))
+            source=n["source"],
+            note=n["note"],
+        )
+        to_create.append(p)
 
-    report = {
-        "mode": mode,
-        "rows_in_payload": len(raw_rows),
-        "processed": processed,
-        "to_insert": len(to_create),
-        "duplicates": duplicates,
-        "errors_count": len(errors)
-    }
-
+    # If dry-run, return report without writing
     if mode == "dry":
-        return _ok({**report, "errors": errors})
+        return _ok({
+            "mode": "dry",
+            "source": src,
+            "processed": processed,
+            "valid": len(to_create),
+            "duplicates_skipped": duplicates if on_dup == "skip" else 0,
+            "errors_count": len(errors),
+            "errors": errors[:200],  # safety cap
+        })
 
-    # commit mode
+    # Commit mode
+    if not to_create:
+        # still return a clean report (no writes), so client UX is smooth
+        return _ok({
+            "mode": "commit",
+            "source": src,
+            "processed": processed,
+            "inserted": 0,
+            "duplicates_skipped": duplicates if on_dup == "skip" else 0,
+            "errors_count": len(errors),
+            "errors": errors[:200],
+        })
+
+    inserted: List[AttendancePunch] = []
     try:
-        if to_create:
-            db.session.bulk_save_objects(to_create)
+        for p in to_create:
+            db.session.add(p)
+            inserted.append(p)
         db.session.commit()
     except SQLAlchemyError as e:
         db.session.rollback()
-        return _fail(f"DB error while inserting: {str(e)}", 500, errors=errors)
+        log.exception("punch import failed: %s", e)
+        return _fail("database error while inserting punches", 500)
 
-    # recompute daily per affected day
-    if want_recompute and to_create:
-        _recompute_after_commit(to_create)
+    # recompute (safe/no-op if engine not available)
+    if want_recompute:
+        _recompute_after_commit(inserted)
 
-    inserted_preview = [{
-        "id": p.id, "employee_id": p.employee_id, "kind": p.kind,
-        "ts": p.ts.isoformat(sep=" "), "source": getattr(p, "source", None)
-    } for p in to_create[:25]]
-
-    return _ok({**report, "inserted_preview": inserted_preview, "errors": errors})
+    return _ok({
+        "mode": "commit",
+        "source": src,
+        "processed": processed,
+        "inserted": len(inserted),
+        "duplicates_skipped": duplicates if on_dup == "skip" else 0,
+        "errors_count": len(errors),
+        "errors": errors[:200],
+    }, status=201)

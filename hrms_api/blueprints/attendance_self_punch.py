@@ -1,128 +1,238 @@
-# apps/backend/hrms_api/blueprints/attendance_self_punch.py
-from datetime import datetime, timedelta
+# hrms_api/blueprints/attendance_self_punch.py
+from __future__ import annotations
+from datetime import datetime, date, timedelta
+from typing import Optional, Any
+
 from flask import Blueprint, request, jsonify
-from flask_jwt_extended import jwt_required, get_jwt_identity, get_jwt  # <-- add get_jwt
-from sqlalchemy.exc import SQLAlchemyError
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from sqlalchemy import and_, asc, desc
 
 from hrms_api.extensions import db
 from hrms_api.models.employee import Employee
 from hrms_api.models.attendance_punch import AttendancePunch
 
-# If you kept a soft import of User earlier, it's fine to keep. We won't rely on it.
+# Optional permissions: if not present, endpoints still work with JWT only.
 try:
-    from hrms_api.models.user import User as _UserModel
+    from hrms_api.common.auth import requires_perms
 except Exception:
-    _UserModel = None
+    def requires_perms(_):  # noop fallback
+        def _wrap(fn): return fn
+        return _wrap
 
+bp = Blueprint("attendance_self_punch", __name__, url_prefix="/api/v1/attendance/self-punches")
 
-# Keep the same path your Postman uses: /api/v1/attendance/punches/self
-bp = Blueprint("attendance_self_punch", __name__, url_prefix="/api/v1/attendance/punches")
+# ---- settings (tune as needed) ----
+MAX_SELF_PUNCHES_PER_DAY = 6        # prevent spam
+SELF_PUNCH_BACKDATE_DAYS = 3        # how far back a user can self-punch
 
-def _ok(data=None, status=200):
-    return jsonify({"success": True, "data": data}), status
+# ---------- envelopes ----------
+def _ok(data=None, status=200, **meta):
+    payload = {"success": True, "data": data}
+    if meta: payload["meta"] = meta
+    return jsonify(payload), status
 
-def _fail(msg, status=400):
-    return jsonify({"success": False, "error": {"message": msg}}), status
+def _fail(msg, status=400, code=None, detail=None):
+    err = {"message": msg}
+    if code: err["code"] = code
+    if detail: err["detail"] = detail
+    return jsonify({"success": False, "error": err}), status
 
-def _resolve_employee_id(identity) -> int | None:
-    """
-    Priority:
-    1) explicit ?employeeId= / body.employeeId (best for testing/kiosks)
-    2) JWT claims: employee_id / employeeId / emp_id / empId (if you add this at login)
-    3) Optional: User.employee_id property (if your User model exposes it)
-    """
-    # 1) explicit param/body
-    emp_id = request.args.get("employeeId", type=int) or (request.json or {}).get("employeeId")
-    if emp_id:
-        return int(emp_id)
+# ---------- helpers ----------
+_DT_FORMATS = (
+    "%Y-%m-%d %H:%M:%S",
+    "%Y-%m-%d %H:%M",
+    "%Y-%m-%dT%H:%M:%S",
+    "%Y-%m-%dT%H:%M",
+)
 
-    # 2) JWT claims
+def _parse_ts(s: str | None):
+    if not s: return None
+    s = s.strip()
     try:
-        claims = get_jwt() or {}
-        for key in ("employee_id", "employeeId", "emp_id", "empId"):
-            if key in claims and claims[key]:
-                try:
-                    return int(claims[key])
-                except Exception:
-                    pass
+        return datetime.fromisoformat(s.replace(" ", "T"))
     except Exception:
         pass
-
-    # 3) Optional: User.employee_id property (if present)
-    try:
-        if _UserModel is not None and hasattr(_UserModel, "query"):
-            u = _UserModel.query.get(identity)
-            if u and getattr(u, "employee_id", None):
-                return int(u.employee_id)
-    except Exception:
-        pass
-
+    for fmt in _DT_FORMATS:
+        try: return datetime.strptime(s, fmt)
+        except Exception: pass
     return None
 
+def _normalize_kind(v: Any) -> Optional[str]:
+    if v is None: return None
+    s = str(v).strip().lower()
+    if s in ("in", "out"): return s
+    return None
 
-def _last_punch(emp_id: int, hours: int = 24):
-    since = datetime.now() - timedelta(hours=hours)
-    return (AttendancePunch.query
-            .filter(AttendancePunch.employee_id == emp_id,
-                    AttendancePunch.ts >= since)
-            .order_by(AttendancePunch.ts.desc())
-            .first())
+def _get_employee_id_from_jwt() -> Optional[int]:
+    """
+    Try common identity shapes:
+      - int employee_id directly
+      - {"employee_id": 123, ...}
+      - {"user_id": 7, ...} with Employee.user_id relation (fallback)
+    """
+    ident = get_jwt_identity()
+    # direct int
+    if isinstance(ident, int):
+        return ident
+    # dict-like
+    if isinstance(ident, dict):
+        if ident.get("employee_id"): 
+            try: return int(ident["employee_id"])
+            except Exception: pass
+        if ident.get("emp_id"): 
+            try: return int(ident["emp_id"])
+            except Exception: pass
+        # optional fallback via user_id -> employee
+        uid = ident.get("user_id") or ident.get("id")
+        if uid:
+            try:
+                # if your Employee has user_id FK:
+                emp = Employee.query.filter_by(user_id=int(uid)).first()
+                if emp: return emp.id
+            except Exception:
+                pass
+    return None
 
-@bp.post("/self")
+def _recompute_after(emp_id: int, day: date):
+    try:
+        from hrms_api.services.attendance_engine import recompute_daily
+    except Exception:
+        recompute_daily = None
+    if recompute_daily:
+        try:
+            recompute_daily(emp_id, day)
+        except Exception:
+            pass
+
+def _row(p: AttendancePunch):
+    return {
+        "id": p.id,
+        "employee_id": p.employee_id,
+        "ts": p.ts.isoformat() if p.ts else None,
+        "kind": p.kind,
+        "source": getattr(p, "source", None),
+        "note": getattr(p, "note", None),
+        "created_at": getattr(p, "created_at", None).isoformat() if getattr(p, "created_at", None) else None,
+        "updated_at": getattr(p, "updated_at", None).isoformat() if getattr(p, "updated_at", None) else None,
+    }
+
+# ---------- routes ----------
+
+@bp.get("")
 @jwt_required()
-def self_punch():
+@requires_perms("attendance.self.read")
+def list_my_punches():
     """
-    POST /api/v1/attendance/punches/self
-    Body: { "kind": "in" | "out", "ts": "YYYY-MM-DD HH:MM[:SS]" (optional), "employeeId" (optional) }
+    GET /api/v1/attendance/self-punches?from=&to=&kind=&page=&size=
+    - from/to: YYYY-MM-DD (inclusive day window)
+    - kind: in|out
+    - page/size: pagination
     """
-    identity = get_jwt_identity()
-    emp_id = _resolve_employee_id(identity)
+    emp_id = _get_employee_id_from_jwt()
     if not emp_id:
-        return _fail("Could not resolve employeeId. Pass employeeId or include employee_id in JWT claims.", 422)
-
-    emp = Employee.query.get(emp_id)
-    if not emp:
+        return _fail("Employee context not found on token", 401)
+    if not Employee.query.get(emp_id):
         return _fail("Employee not found", 404)
 
-    payload = request.get_json(silent=True) or {}
-    kind = (payload.get("kind") or "").strip().lower()
-    if kind not in ("in", "out"):
-        return _fail("kind must be 'in' or 'out'", 422)
+    dfrom = request.args.get("from") or request.args.get("date_from")
+    dto   = request.args.get("to")   or request.args.get("date_to")
+    df = datetime.strptime(dfrom, "%Y-%m-%d").date() if dfrom else None
+    dt = datetime.strptime(dto, "%Y-%m-%d").date()   if dto   else None
 
-    ts_str = payload.get("ts")
-    if ts_str:
-        try:
-            ts = datetime.fromisoformat(ts_str.replace("T", " "))
-        except Exception:
-            return _fail("Invalid ts. Use 'YYYY-MM-DD HH:MM[:SS]'", 422)
-    else:
-        ts = datetime.now()
+    k = _normalize_kind(request.args.get("kind"))
 
-    since = datetime.now() - timedelta(hours=24)
-    prev = (AttendancePunch.query
-            .filter(AttendancePunch.employee_id == emp_id,
-                    AttendancePunch.ts >= since)
-            .order_by(AttendancePunch.ts.desc())
-            .first())
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+    except Exception:
+        page = 1
+    raw = request.args.get("size", request.args.get("limit", 20))
+    try:
+        size = max(min(int(raw), 100), 1)
+    except Exception:
+        size = 20
 
-    if prev and prev.kind == kind:
-        return _fail(f"Last punch was already '{kind}' at {prev.ts}. Please punch the opposite first.", 409)
+    q = AttendancePunch.query.filter(AttendancePunch.employee_id == emp_id)
+    if df:
+        q = q.filter(AttendancePunch.ts >= datetime.combine(df, datetime.min.time()))
+    if dt:
+        q = q.filter(AttendancePunch.ts <= datetime.combine(dt, datetime.max.time()))
+    if k:
+        q = q.filter(AttendancePunch.kind == k)
+
+    q = q.order_by(desc(AttendancePunch.ts))
+    total = q.count()
+    items = q.offset((page - 1) * size).limit(size).all()
+    return _ok([_row(i) for i in items], page=page, size=size, total=total)
+
+@bp.post("")
+@jwt_required()
+@requires_perms("attendance.self.create")
+def create_my_punch():
+    """
+    Body:
+    {
+      "ts": "YYYY-MM-DD HH:MM[:SS]" or ISO,
+      "kind": "in" | "out",
+      "note": "optional reason"
+    }
+    Rules:
+      - Daily cap (MAX_SELF_PUNCHES_PER_DAY)
+      - Backdate only up to SELF_PUNCH_BACKDATE_DAYS
+      - Duplicate protection on (employee_id, ts, kind)
+    """
+    emp_id = _get_employee_id_from_jwt()
+    if not emp_id:
+        return _fail("Employee context not found on token", 401)
+    if not Employee.query.get(emp_id):
+        return _fail("Employee not found", 404)
+
+    d = request.get_json(silent=True, force=True) or {}
+    ts = _parse_ts(d.get("ts"))
+    kind = _normalize_kind(d.get("kind"))
+    note = (d.get("note") or "").strip() or None
+
+    if not (ts and kind):
+        return _fail("ts and kind are required", 422)
+
+    # backdate & future sanity
+    today = date.today()
+    min_day = today - timedelta(days=SELF_PUNCH_BACKDATE_DAYS)
+    if ts.date() < min_day:
+        return _fail(f"Backdate window exceeded (max {SELF_PUNCH_BACKDATE_DAYS} days)", 422)
+    # allow future a little (e.g., up to now only)
+    if ts > datetime.now() + timedelta(minutes=5):
+        return _fail("Future timestamp not allowed", 422)
+
+    # daily cap
+    day_start = datetime.combine(ts.date(), datetime.min.time())
+    day_end   = datetime.combine(ts.date(), datetime.max.time())
+    day_count = AttendancePunch.query.filter(
+        AttendancePunch.employee_id == emp_id,
+        AttendancePunch.ts >= day_start,
+        AttendancePunch.ts <= day_end
+    ).count()
+    if day_count >= MAX_SELF_PUNCHES_PER_DAY:
+        return _fail("Daily self-punch limit reached", 409)
+
+    # duplicate
+    dup = AttendancePunch.query.filter(
+        and_(
+            AttendancePunch.employee_id == emp_id,
+            AttendancePunch.ts == ts,
+            AttendancePunch.kind == kind,
+        )
+    ).first()
+    if dup:
+        return _fail("Duplicate punch", 409)
 
     p = AttendancePunch(employee_id=emp_id, ts=ts, kind=kind)
     if hasattr(AttendancePunch, "source"):
         p.source = "self"
+    if hasattr(AttendancePunch, "note"):
+        p.note = note
 
-    try:
-        db.session.add(p)
-        db.session.commit()
-    except SQLAlchemyError as e:
-        db.session.rollback()
-        return _fail(f"DB error: {str(e)}", 500)
+    db.session.add(p)
+    db.session.commit()
 
-    return _ok({
-        "id": p.id,
-        "employee_id": p.employee_id,
-        "kind": p.kind,
-        "ts": p.ts.isoformat(sep=" "),
-        "source": getattr(p, "source", None)
-    }, status=201)
+    _recompute_after(emp_id, ts.date())
+    return _ok(_row(p), 201)

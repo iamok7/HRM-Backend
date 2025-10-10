@@ -1,3 +1,6 @@
+# hrms_api/blueprints/attendance_monthly.py
+from __future__ import annotations
+
 from datetime import datetime, date, time, timedelta
 import calendar as pycal
 from flask import Blueprint, request, jsonify
@@ -15,7 +18,7 @@ from hrms_api.models.leave import LeaveRequest, LeaveType
 
 bp = Blueprint("attendance_monthly", __name__, url_prefix="/api/v1/attendance")
 
-# ---------- tiny helpers (match your blueprint style) -------------------------
+# ---------- envelopes ----------
 def _ok(data=None, status=200, **meta):
     payload = {"success": True, "data": data}
     if meta:
@@ -25,9 +28,22 @@ def _ok(data=None, status=200, **meta):
 def _fail(msg, status=400):
     return jsonify({"success": False, "error": {"message": msg}}), status
 
+
+# ---------- tiny helpers ----------
+def _as_int(val, field):
+    if val in (None, "", "null"):
+        return None
+    try:
+        return int(val)
+    except Exception:
+        raise ValueError(f"{field} must be integer")
+
 def _ym():
-    y = request.args.get("year", type=int)
-    m = request.args.get("month", type=int)
+    try:
+        y = _as_int(request.args.get("year"), "year")
+        m = _as_int(request.args.get("month"), "month")
+    except ValueError as ex:
+        return None, None
     if not y or not m or not (1 <= m <= 12):
         return None, None
     return y, m
@@ -43,9 +59,11 @@ def _week_in_month(d: date) -> int:
 def _tstr(t: time | None) -> str | None:
     return t.strftime("%H:%M") if t else None
 
+
+# ---------- leave overlay ----------
 def _approved_leave_map(employee_id: int, first_day: date, last_day: date):
     """
-    Map of date -> {type_id, type_code, type_name, part_day}
+    Map: date -> {type_id, type_code, type_name, part_day}
     for APPROVED leave requests overlapping [first_day..last_day].
     """
     rows = (
@@ -61,19 +79,21 @@ def _approved_leave_map(employee_id: int, first_day: date, last_day: date):
     )
     out = {}
     for r, t in rows:
+        part = getattr(r, "part_day", None) or None
         cur = r.start_date
         while cur <= r.end_date:
             if first_day <= cur <= last_day:
                 out[cur] = {
                     "type_id": r.leave_type_id,
-                    "type_code": t.code,
-                    "type_name": t.name,
-                    "part_day": r.part_day or None,
+                    "type_code": getattr(t, "code", None),
+                    "type_name": getattr(t, "name", None),
+                    "part_day": part,  # e.g., "am" | "pm" | "half" | None
                 }
             cur = cur + timedelta(days=1)
     return out
 
-# ---------- model helpers (JSON-safe) -----------------------------------------
+
+# ---------- model helpers ----------
 def _rules_for(emp: Employee):
     """
     Weekly-off rules grouped by weekday -> list[(is_alternate, weeks:set)]
@@ -84,13 +104,15 @@ def _rules_for(emp: Employee):
     ).all()
     bywd = {i: [] for i in range(7)}
     for r in rules:
+        is_alt = bool(getattr(r, "is_alternate", False))
         weeks = set()
-        if getattr(r, "is_alternate", False) and getattr(r, "week_numbers", None):
+        wn = getattr(r, "week_numbers", None)
+        if is_alt and wn:
             try:
-                weeks = {int(x.strip()) for x in r.week_numbers.split(",") if x.strip()}
+                weeks = {int(x.strip()) for x in str(wn).split(",") if x.strip()}
             except Exception:
                 weeks = set()
-        bywd[r.weekday].append((bool(getattr(r, "is_alternate", False)), weeks))
+        bywd[int(getattr(r, "weekday", 0) or 0)].append((is_alt, weeks))
     return bywd
 
 def _holiday_on(emp: Employee, d: date):
@@ -129,20 +151,24 @@ def _shift_on(emp_id: int, d: date):
     if not asa:
         return None
     _, s = asa
+    # tolerate different field names: is_night vs is_night_shift
+    is_night = bool(getattr(s, "is_night", getattr(s, "is_night_shift", False)))
     return {
         "id": s.id,
-        "code": s.code,
-        "name": s.name,
-        "is_night": bool(getattr(s, "is_night", False)),
+        "code": getattr(s, "code", None),
+        "name": getattr(s, "name", None),
+        "is_night": is_night,
         "start_time": _tstr(getattr(s, "start_time", None)),
         "end_time": _tstr(getattr(s, "end_time", None)),
         "break_minutes": int(getattr(s, "break_minutes", 0) or 0),
         "grace_minutes": int(getattr(s, "grace_minutes", 0) or 0),
     }
 
+
+# ---------- per-day compute ----------
 def _compute_day(emp: Employee, day: date, bywd):
     """
-    Mirrors your daily-status logic but kept local so monthly stays JSON-safe.
+    Mirrors your daily-status logic but JSON-safe.
     """
     # Holiday?
     hol = _holiday_on(emp, day)
@@ -150,7 +176,7 @@ def _compute_day(emp: Employee, day: date, bywd):
     holiday_name = hol.name if hol else None
 
     # Weekly off?
-    wd = day.weekday()
+    wd = int(day.weekday())
     is_wo = False
     for is_alt, weeks in bywd.get(wd, []):
         if not is_alt:
@@ -162,10 +188,12 @@ def _compute_day(emp: Employee, day: date, bywd):
 
     # Shift info (JSON-ready)
     sh = _shift_on(emp.id, day)
+
     # Span for punches
     span_start = datetime.combine(day, time.min)
     span_end = datetime.combine(day, time.max)
-    if sh and sh["is_night"]:
+    if sh and sh.get("is_night"):
+        # If night shift, include till next day end to be safe
         span_end = span_end + timedelta(days=1)
 
     punches = AttendancePunch.query.filter(
@@ -174,7 +202,12 @@ def _compute_day(emp: Employee, day: date, bywd):
         AttendancePunch.ts <= span_end,
     ).order_by(AttendancePunch.ts.asc()).all()
 
-    serial = [{"id": p.id, "ts": p.ts.isoformat(sep=" "), "kind": p.kind, "source": getattr(p, "source", None)} for p in punches]
+    serial = [{
+        "id": p.id,
+        "ts": p.ts.isoformat(sep=" ") if getattr(p, "ts", None) else None,
+        "kind": p.kind,
+        "source": getattr(p, "source", None)
+    } for p in punches]
 
     # derive first_in / last_out
     first_in = next((p.ts for p in punches if p.kind == "in"), None)
@@ -187,17 +220,19 @@ def _compute_day(emp: Employee, day: date, bywd):
         if p.kind == "in":
             last_in_dt = p.ts
         elif p.kind == "out" and last_in_dt:
-            work_min += int((p.ts - last_in_dt).total_seconds() // 60)
-            last_in_dt = None
+            try:
+                work_min += int((p.ts - last_in_dt).total_seconds() // 60)
+            finally:
+                last_in_dt = None
 
     late_min = 0
     early_min = 0
     # compute late/early only when shift present
-    if sh and first_in and sh["start_time"]:
+    if sh and first_in and sh.get("start_time"):
         sched_in = datetime.combine(day, datetime.strptime(sh["start_time"], "%H:%M").time())
-        late_min = max(0, int((first_in - sched_in).total_seconds() // 60) - (sh["grace_minutes"] or 0))
-    if sh and last_out and sh["end_time"]:
-        sched_out_day = day if not sh["is_night"] else (day + timedelta(days=1))
+        late_min = max(0, int((first_in - sched_in).total_seconds() // 60) - int(sh.get("grace_minutes") or 0))
+    if sh and last_out and sh.get("end_time"):
+        sched_out_day = day if not sh.get("is_night") else (day + timedelta(days=1))
         sched_out = datetime.combine(sched_out_day, datetime.strptime(sh["end_time"], "%H:%M").time())
         early_min = max(0, int((sched_out - last_out).total_seconds() // 60))
 
@@ -233,16 +268,23 @@ def _compute_day(emp: Employee, day: date, bywd):
         "remarks": ", ".join(remarks) if remarks else None,
     }
 
-# ---------- GET /monthly-status ----------------------------------------------
+
+# ---------- GET /monthly-status ----------
 @bp.get("/monthly-status")
 @jwt_required()
 def monthly_status():
     """
     GET /api/v1/attendance/monthly-status?employeeId=&year=&month=
     """
-    emp_id = request.args.get("employeeId", type=int)
+    # employeeId (accept string/number)
+    raw_emp = request.args.get("employeeId")
+    try:
+        emp_id = _as_int(raw_emp, "employeeId")
+    except ValueError as ex:
+        return _fail(str(ex), 422)
     if not emp_id:
         return _fail("employeeId is required", 422)
+
     year, month = _ym()
     if not year:
         return _fail("year and month are required", 422)
@@ -253,8 +295,6 @@ def monthly_status():
         return _fail("Employee not found", 404)
 
     bywd = _rules_for(emp)
-
-    # Leave overlay map for the window
     leave_by_day = _approved_leave_map(emp_id, start, end)
 
     # iterate dates
@@ -265,7 +305,6 @@ def monthly_status():
         "present": 0, "partial": 0, "absent": 0,
         "weekly_off": 0, "holiday": 0, "no_shift": 0,
         "work_minutes": 0, "late_minutes": 0, "early_minutes": 0,
-        # new counters (non-breaking)
         "leave_full": 0, "leave_half": 0
     }
 
@@ -276,27 +315,26 @@ def monthly_status():
         lv = leave_by_day.get(cur)
         if lv:
             row["leave"] = {
-                "type_id": lv["type_id"],
-                "type_code": lv["type_code"],
-                "type_name": lv["type_name"],
-                "part_day": lv["part_day"],
+                "type_id": lv.get("type_id"),
+                "type_code": lv.get("type_code"),
+                "type_name": lv.get("type_name"),
+                "part_day": lv.get("part_day"),
             }
             # If it's not Holiday/WeeklyOff, annotate/override status
             if row["status"] not in ("Holiday", "WeeklyOff"):
                 has_punches = bool(row.get("punches"))
-                part = (lv["part_day"] in ("am", "pm", "half"))
+                part = (lv.get("part_day") in ("am", "pm", "half"))
                 if not has_punches and not part:
-                    row["status"] = f"Leave({lv['type_code']})"
+                    row["status"] = f"Leave({lv.get('type_code')})"
                     totals["leave_full"] += 1
                 else:
-                    # Half leave or leave with some punches
-                    row["status_detail"] = f"HalfLeave({lv['type_code']}{' '+lv['part_day'] if lv['part_day'] else ''})"
+                    row["status_detail"] = f"HalfLeave({lv.get('type_code')}{' '+lv.get('part_day') if lv.get('part_day') else ''})"
                     totals["leave_half"] += 1
 
         days.append(row)
 
-        # ---- Totals (legacy keys kept the same) ----
-        st = row["status"]
+        # ---- Totals ----
+        st = row.get("status")
         if st == "Present": totals["present"] += 1
         elif st == "Partial": totals["partial"] += 1
         elif st == "Absent": totals["absent"] += 1
@@ -304,9 +342,10 @@ def monthly_status():
         elif st == "Holiday": totals["holiday"] += 1
         elif st == "NoShift": totals["no_shift"] += 1
 
-        totals["work_minutes"]  += int(row["work_minutes"] or 0)
-        totals["late_minutes"]  += int(row["late_minutes"] or 0)
-        totals["early_minutes"] += int(row["early_minutes"] or 0)
+        totals["work_minutes"]  += int(row.get("work_minutes") or 0)
+        totals["late_minutes"]  += int(row.get("late_minutes") or 0)
+        totals["early_minutes"] += int(row.get("early_minutes") or 0)
+
         cur += one
 
     return _ok({

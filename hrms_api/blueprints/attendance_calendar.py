@@ -1,19 +1,21 @@
-from datetime import date, timedelta
+# hrms_api/blueprints/attendance_calendar.py
+from __future__ import annotations
+
+from datetime import datetime, date, time, timedelta
 import calendar as pycal
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required
 from sqlalchemy import or_
+
 from hrms_api.extensions import db
 from hrms_api.models.employee import Employee
 from hrms_api.models.attendance import Holiday, WeeklyOffRule, Shift
 from hrms_api.models.attendance_assignment import EmployeeShiftAssignment
-
-# Leave overlay (for calendar view)
-from hrms_api.models.leave import LeaveRequest, LeaveType
+from hrms_api.models.attendance_punch import AttendancePunch
 
 bp = Blueprint("attendance_calendar", __name__, url_prefix="/api/v1/attendance")
 
-# ---- helpers ---------------------------------------------------------------
+# ---------- envelopes ----------
 def _ok(data=None, status=200, **meta):
     payload = {"success": True, "data": data}
     if meta: payload["meta"] = meta
@@ -22,9 +24,18 @@ def _ok(data=None, status=200, **meta):
 def _fail(msg, status=400):
     return jsonify({"success": False, "error": {"message": msg}}), status
 
+# ---------- tiny helpers ----------
+def _as_int(val, field):
+    if val in (None, "", "null"): return None
+    try: return int(val)
+    except Exception: raise ValueError(f"{field} must be integer")
+
 def _ym():
-    y = request.args.get("year", type=int)
-    m = request.args.get("month", type=int)
+    try:
+        y = _as_int(request.args.get("year"), "year")
+        m = _as_int(request.args.get("month"), "month")
+    except ValueError:
+        return None, None
     if not y or not m or not (1 <= m <= 12): return None, None
     return y, m
 
@@ -33,188 +44,182 @@ def _month_bounds(year: int, month: int):
     return date(year, month, 1), date(year, month, last)
 
 def _week_in_month(d: date) -> int:
-    # 1..5
     return (d.day - 1) // 7 + 1
 
-def _daterange(d1: date, d2: date):
-    cur = d1
-    one = timedelta(days=1)
-    while cur <= d2:
-        yield cur
-        cur += one
+def _tstr(t: time | None) -> str | None:
+    return t.strftime("%H:%M") if t else None
 
-def _approved_leave_map(employee_id: int, first_day: date, last_day: date):
-    rows = (
-        db.session.query(LeaveRequest, LeaveType)
-        .join(LeaveType, LeaveType.id == LeaveRequest.leave_type_id)
-        .filter(
-            LeaveRequest.employee_id == employee_id,
-            LeaveRequest.status == "approved",
-            LeaveRequest.start_date <= last_day,
-            LeaveRequest.end_date >= first_day,
-        )
-        .all()
-    )
-    out = {}
-    for r, t in rows:
-        cur = r.start_date
-        while cur <= r.end_date:
-            if first_day <= cur <= last_day:
-                out[cur] = {
-                    "type_id": r.leave_type_id,
-                    "type_code": t.code,
-                    "type_name": t.name,
-                    "part_day": r.part_day or None,
-                }
-            cur += timedelta(days=1)
-    return out
-
-# ---- GET /calendar ---------------------------------------------------------
-@bp.get("/calendar")
-@jwt_required()
-def employee_calendar():
-    """
-    Build a month calendar for an employee by merging:
-    - Shift assignments (with shift timings)
-    - Weekly off rules (company/location/global)
-    - Holidays (company + location or global)
-    - (new) Approved Leave overlay (non-breaking)
-    """
-    emp_id = request.args.get("employeeId", type=int)
-    if not emp_id: return _fail("employeeId is required", 422)
-    year, month = _ym()
-    if not year:  return _fail("year and month are required", 422)
-
-    start, end = _month_bounds(year, month)
-    emp = Employee.query.get(emp_id)
-    if not emp: return _fail("Employee not found", 404)
-
-    # --- Holidays (company + (location or global))
-    hols = Holiday.query.filter(
-        Holiday.company_id == emp.company_id,
-        Holiday.date >= start, Holiday.date <= end,
-        or_(Holiday.location_id == emp.location_id, Holiday.location_id.is_(None))
-    ).all()
-    # Prefer location-specific over global for same date
-    holidays_by_date = {}
-    for h in hols:
-        key = h.date
-        if key not in holidays_by_date or holidays_by_date[key].location_id is None:
-            holidays_by_date[key] = h
-
-    # --- Weekly Off rules (company + (location or global))
-    wos = WeeklyOffRule.query.filter(
+# ---------- rules / holiday / shift ----------
+def _rules_for(emp: Employee):
+    rules = WeeklyOffRule.query.filter(
         WeeklyOffRule.company_id == emp.company_id,
         or_(WeeklyOffRule.location_id == emp.location_id, WeeklyOffRule.location_id.is_(None))
     ).all()
-    # bucket by weekday
-    rules_by_weekday = {i: [] for i in range(7)}
-    for r in wos:
+    bywd = {i: [] for i in range(7)}
+    for r in rules:
+        is_alt = bool(getattr(r, "is_alternate", False))
         weeks = set()
-        if getattr(r, "is_alternate", False) and getattr(r, "week_numbers", None):
+        wn = getattr(r, "week_numbers", None)
+        if is_alt and wn:
             try:
-                weeks = {int(x.strip()) for x in r.week_numbers.split(",") if x.strip()}
+                weeks = {int(x.strip()) for x in str(wn).split(",") if x.strip()}
             except Exception:
                 weeks = set()
-        rules_by_weekday[r.weekday].append((bool(getattr(r, "is_alternate", False)), weeks))
+        bywd[int(getattr(r, "weekday", 0) or 0)].append((is_alt, weeks))
+    return bywd
 
-    # --- Shift assignments overlapping the month (joined with shifts)
-    assigns = (
+def _holiday_on(emp: Employee, d: date):
+    hol = Holiday.query.filter(
+        Holiday.company_id == emp.company_id,
+        Holiday.date == d,
+        Holiday.location_id == emp.location_id
+    ).first()
+    if not hol:
+        hol = Holiday.query.filter(
+            Holiday.company_id == emp.company_id,
+            Holiday.date == d,
+            Holiday.location_id.is_(None)
+        ).first()
+    return hol
+
+def _shift_on(emp_id: int, d: date):
+    asa = (
         db.session.query(EmployeeShiftAssignment, Shift)
         .join(Shift, EmployeeShiftAssignment.shift_id == Shift.id)
         .filter(
             EmployeeShiftAssignment.employee_id == emp_id,
-            or_(EmployeeShiftAssignment.end_date == None, EmployeeShiftAssignment.end_date >= start),  # noqa: E711
-            EmployeeShiftAssignment.start_date <= end
+            or_(EmployeeShiftAssignment.end_date.is_(None), EmployeeShiftAssignment.end_date >= d),
+            EmployeeShiftAssignment.start_date <= d,
         )
-        .all()
+        .order_by(EmployeeShiftAssignment.start_date.desc())
+        .first()
     )
-    # store as ranges
-    ranges = []
-    for a, s in assigns:
-        r_start = max(a.start_date, start)
-        r_end = min(a.end_date if a.end_date else end, end)
-        ranges.append({
-            "start": r_start, "end": r_end,
-            "shift": {
-                "id": s.id, "code": s.code, "name": s.name,
-                "start_time": s.start_time.strftime("%H:%M:%S"),
-                "end_time": s.end_time.strftime("%H:%M:%S"),
-                "break_minutes": s.break_minutes,
-                "grace_minutes": s.grace_minutes,
-                "is_night": s.is_night,
-            }
-        })
-
-    def shift_for_day(d: date):
-        for r in ranges:
-            if r["start"] <= d <= r["end"]:
-                return r["shift"]
+    if not asa:
         return None
+    _, s = asa
+    is_night = bool(getattr(s, "is_night", getattr(s, "is_night_shift", False)))
+    return {
+        "id": s.id,
+        "code": getattr(s, "code", None),
+        "name": getattr(s, "name", None),
+        "is_night": is_night,
+        "start_time": _tstr(getattr(s, "start_time", None)),
+        "end_time": _tstr(getattr(s, "end_time", None)),
+        "break_minutes": int(getattr(s, "break_minutes", 0) or 0),
+        "grace_minutes": int(getattr(s, "grace_minutes", 0) or 0),
+    }
 
-    # --- Leave overlay for the window
-    leave_by_day = _approved_leave_map(emp_id, start, end)
+# ---------- per-day compute (compact) ----------
+def _compute_day(emp: Employee, day: date, rules_by_wd, include_punches: bool, include_shift: bool):
+    hol = _holiday_on(emp, day)
+    is_holiday = bool(hol)
+    holiday_name = hol.name if hol else None
 
-    # Build days
+    wd = int(day.weekday())
+    is_wo = False
+    for is_alt, weeks in rules_by_wd.get(wd, []):
+        if not is_alt:
+            is_wo = True; break
+        if _week_in_month(day) in weeks:
+            is_wo = True; break
+
+    sh = _shift_on(emp.id, day) if include_shift else None
+
+    span_start = datetime.combine(day, time.min)
+    span_end = datetime.combine(day, time.max)
+    if sh and sh.get("is_night"):  # include next-day
+        span_end = span_end + timedelta(days=1)
+
+    punches_q = AttendancePunch.query.filter(
+        AttendancePunch.employee_id == emp.id,
+        AttendancePunch.ts >= span_start,
+        AttendancePunch.ts <= span_end,
+    ).order_by(AttendancePunch.ts.asc())
+
+    punches = punches_q.all() if include_punches else []
+    serial = [{
+        "id": p.id,
+        "ts": p.ts.isoformat(sep=" "),
+        "kind": p.kind,
+        "src": getattr(p, "source", None)
+    } for p in punches] if include_punches else None
+
+    # status (simple): Present if at least one IN and one OUT; Partial if either; else Absent.
+    first_in = next((p.ts for p in punches if p.kind == "in"), None) if include_punches else None
+    last_out = next((p.ts for p in reversed(punches) if p.kind == "out"), None) if include_punches else None
+
+    status = "Absent"
+    if include_punches:
+        if first_in and last_out: status = "Present"
+        elif first_in or last_out: status = "Partial"
+    if is_wo: status = "WeeklyOff"
+    if is_holiday: status = "Holiday"
+    if (not sh) and (not is_wo and not is_holiday):
+        status = "NoShift"
+
+    return {
+        "date": day.isoformat(),
+        "weekday": wd,
+        "status": status,
+        "is_weekly_off": is_wo,
+        "is_holiday": is_holiday,
+        "holiday_name": holiday_name,
+        "shift": sh if include_shift else None,
+        "punches": serial,  # None unless include_punches=1
+    }
+
+# ---------- GET /calendar ----------
+@bp.get("/calendar")
+@jwt_required()
+def calendar():
+    """
+    GET /api/v1/attendance/calendar?employeeId=&year=&month=&include_punches=0|1&include_shift=0|1
+    """
+    # employeeId
+    try:
+        emp_id = _as_int(request.args.get("employeeId"), "employeeId")
+    except ValueError as ex:
+        return _fail(str(ex), 422)
+    if not emp_id:
+        return _fail("employeeId is required", 422)
+
+    year, month = _ym()
+    if not year:
+        return _fail("year and month are required", 422)
+
+    include_punches = (str(request.args.get("include_punches", "0")).lower() in ("1", "true", "yes"))
+    include_shift   = (str(request.args.get("include_shift", "1")).lower() in ("1", "true", "yes"))
+
+    emp = Employee.query.get(emp_id)
+    if not emp:
+        return _fail("Employee not found", 404)
+
+    rules = _rules_for(emp)
+    start, end = _month_bounds(year, month)
+
+    cur = start
     days = []
-    totals = {"days": 0, "holidays": 0, "weekly_offs": 0, "working_days": 0, "no_shift": 0,
-              "leave_full": 0, "leave_half": 0}
+    totals = {"present": 0, "partial": 0, "absent": 0, "weekly_off": 0, "holiday": 0, "no_shift": 0}
 
-    for d in _daterange(start, end):
-        wd = d.weekday()  # 0=Mon..6=Sun
-
-        # weekly off check
-        wo = False
-        for is_alt, weeks in rules_by_weekday.get(wd, []):
-            if not is_alt:
-                wo = True
-            else:
-                if _week_in_month(d) in weeks:
-                    wo = True
-            if wo: break
-
-        # holiday check
-        h = holidays_by_date.get(d)
-        is_holiday = bool(h)
-        holiday_name = h.name if h else None
-
-        # shift
-        sh = shift_for_day(d)
-
-        is_working = bool(sh) and not wo and not is_holiday
-
-        row = {
-            "date": d.isoformat(),
-            "weekday": wd,                  # 0..6
-            "is_weekly_off": wo,
-            "is_holiday": is_holiday,
-            "holiday_name": holiday_name,
-            "shift": sh,                    # or null
-            "is_working_day": is_working
-        }
-
-        # Leave overlay (non-breaking)
-        lv = leave_by_day.get(d)
-        if lv:
-            row["leave"] = {
-                "type_id": lv["type_id"],
-                "type_code": lv["type_code"],
-                "type_name": lv["type_name"],
-                "part_day": lv["part_day"],
-            }
-            # classification for clients that need counts
-            if lv["part_day"] in ("am", "pm", "half"):
-                totals["leave_half"] += 1
-            else:
-                totals["leave_full"] += 1
-
+    one = timedelta(days=1)
+    while cur <= end:
+        row = _compute_day(emp, cur, rules, include_punches, include_shift)
         days.append(row)
 
-        # totals
-        totals["days"] += 1
-        if is_holiday: totals["holidays"] += 1
-        if wo: totals["weekly_offs"] += 1
-        if is_working: totals["working_days"] += 1
-        if not sh: totals["no_shift"] += 1
+        st = row["status"]
+        if st == "Present": totals["present"] += 1
+        elif st == "Partial": totals["partial"] += 1
+        elif st == "Absent": totals["absent"] += 1
+        elif st == "WeeklyOff": totals["weekly_off"] += 1
+        elif st == "Holiday": totals["holiday"] += 1
+        elif st == "NoShift": totals["no_shift"] += 1
 
-    return _ok({"employee_id": emp_id, "year": year, "month": month, "days": days, "totals": totals})
+        cur += one
+
+    return _ok({
+        "employee_id": emp_id,
+        "year": year,
+        "month": month,
+        "totals": totals,
+        "days": days
+    })
