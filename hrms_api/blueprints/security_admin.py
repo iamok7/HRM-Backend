@@ -1,6 +1,5 @@
 # hrms_api/blueprints/security_admin.py
 from __future__ import annotations
-
 from typing import List, Optional
 
 from flask import Blueprint, request, jsonify
@@ -30,13 +29,11 @@ def _fail(msg, status=400, **detail):
     return jsonify({"success": False, "error": err}), status
 
 def _to_bool(x, default=None):
-    if x is None:
-        return default
-    if isinstance(x, bool):
-        return x
+    if x is None: return default
+    if isinstance(x, bool): return x
     s = str(x).strip().lower()
-    if s in ("1", "true", "yes", "y"): return True
-    if s in ("0", "false", "no", "n"):  return False
+    if s in ("1","true","yes","y"): return True
+    if s in ("0","false","no","n"): return False
     return default
 
 def _first_existing_col(model, names: List[str]):
@@ -46,43 +43,34 @@ def _first_existing_col(model, names: List[str]):
             return col
     return None
 
-_NAME_CANDIDATES = ["name", "full_name", "display_name", "username", "email", "id"]
-_ACTIVE_CANDIDATES = ["is_active", "active", "enabled"]
+_NAME_CANDIDATES = ["name","full_name","display_name","username","email","id"]
+_ACTIVE_CANDIDATES = ["is_active","active","enabled"]
 
 def _name_col():
-    col = _first_existing_col(User, _NAME_CANDIDATES)
-    return col or User.id
+    return _first_existing_col(User, _NAME_CANDIDATES) or User.id
 
 def _active_col() -> Optional[object]:
     return _first_existing_col(User, _ACTIVE_CANDIDATES)
 
 def _page():
-    try:
-        return max(int(request.args.get("page", 1)), 1)
-    except Exception:
-        return 1
+    try: return max(int(request.args.get("page", 1)), 1)
+    except: return 1
 
 def _size():
-    try:
-        return max(min(int(request.args.get("size", 20)), 200), 1)
-    except Exception:
-        return 20
+    try: return max(min(int(request.args.get("size", 20)), 200), 1)
+    except: return 20
 
 def _order_by_from_query():
     sort = (request.args.get("sort") or "").strip()
     order = asc
     if sort.startswith("-"):
-        order = desc
-        sort = sort[1:]
-    if not sort:
-        return order(_name_col())
-    col = getattr(User, sort, None) or _name_col()
-    return order(col)
+        order = desc; sort = sort[1:]
+    if not sort: return order(_name_col())
+    return order(getattr(User, sort, None) or _name_col())
 
 def _search_condition(q: str):
     q = (q or "").strip()
-    if not q:
-        return None
+    if not q: return None
     fields = [n for n in ["name","full_name","display_name","username","email"] if hasattr(User, n)]
     conds = [getattr(User, n).ilike(f"%{q}%") for n in fields]
     return or_(*conds) if conds else None
@@ -91,8 +79,7 @@ def _display_name(u: User):
     for n in _NAME_CANDIDATES:
         if hasattr(u, n):
             val = getattr(u, n)
-            if val:
-                return val
+            if val: return val
     return u.id
 
 def _is_active_value(u: User):
@@ -102,51 +89,43 @@ def _is_active_value(u: User):
     return True
 
 def _collect_perm_codes_from_role(r: Role) -> set[str]:
-    """
-    Handles both shapes:
-      - r.permissions -> List[Permission]
-      - r.permissions -> List[RolePermission] (with .permission/.perm or only perm_id)
-    """
     codes: set[str] = set()
     if hasattr(r, "permissions") and r.permissions:
         for obj in r.permissions:
-            # Case A: Permission row
-            if hasattr(obj, "code"):
-                codes.add(obj.code)
-                continue
-            # Case B: RolePermission link row
-            rp = obj  # type: RolePermission
+            if hasattr(obj, "code"):  # Permission row
+                codes.add(obj.code); continue
+            # RolePermission link row
+            rp = obj
             perm_obj = getattr(rp, "permission", None) or getattr(rp, "perm", None)
             if perm_obj and hasattr(perm_obj, "code"):
-                codes.add(perm_obj.code)
-                continue
+                codes.add(perm_obj.code); continue
             perm_id = getattr(rp, "perm_id", None) or getattr(rp, "permission_id", None)
             if perm_id:
                 p = db.session.get(Permission, perm_id)
-                if p and p.code:
-                    codes.add(p.code)
+                if p and p.code: codes.add(p.code)
     else:
-        # Fallback: fetch RolePermission links
         links = db.session.scalars(select(RolePermission).where(RolePermission.role_id == r.id)).all()
         for lk in links:
             perm_obj = getattr(lk, "permission", None) or getattr(lk, "perm", None)
             if perm_obj and hasattr(perm_obj, "code"):
-                codes.add(perm_obj.code)
-                continue
+                codes.add(perm_obj.code); continue
             pid = getattr(lk, "perm_id", None) or getattr(lk, "permission_id", None)
             if pid:
                 p = db.session.get(Permission, pid)
-                if p and p.code:
-                    codes.add(p.code)
+                if p and p.code: codes.add(p.code)
     return codes
 
-def _user_row(u: User, with_roles=False, with_perms=False):
-    row = {
+def _user_brief(u: User):
+    """Small consistent user blob for responses."""
+    return {
         "id": u.id,
         "name": _display_name(u),
         "email": getattr(u, "email", None),
         "is_active": _is_active_value(u),
     }
+
+def _user_row(u: User, with_roles=False, with_perms=False):
+    row = _user_brief(u)
     if with_roles:
         roles = []
         if hasattr(u, "roles") and u.roles:
@@ -198,12 +177,11 @@ def list_staff():
 
     items = (
         db.session.execute(
-            stmt.options(selectinload(u.roles))  # no .unique() needed
+            stmt.options(selectinload(u.roles))
                 .limit(size)
                 .offset((page - 1) * size)
         )
-        .scalars()
-        .all()
+        .scalars().all()
     )
     data = [_user_row(x, with_roles=True, with_perms=False) for x in items]
     return _ok(data, meta={"page": page, "size": size, "total": total})
@@ -238,17 +216,12 @@ def users_with_roles_and_permissions():
     items = (
         db.session.execute(
             stmt.options(
-                # If Role.permissions is Permission collection, this loads those.
-                # If it's RolePermission link rows, we still avoid duplicates and fetch links cheaply.
                 selectinload(u.roles).selectinload(Role.permissions)
             )
-            .limit(size)
-            .offset((page - 1) * size)
+            .limit(size).offset((page - 1) * size)
         )
-        .scalars()
-        .all()
+        .scalars().all()
     )
-
     data = [_user_row(x, with_roles=True, with_perms=True) for x in items]
     return _ok(data, meta={"page": page, "size": size, "total": total})
 
@@ -268,7 +241,7 @@ def list_permissions():
     perms = db.session.scalars(select(Permission).order_by(Permission.code)).all()
     return _ok([{"id": p.id, "code": p.code, "name": getattr(p, "name", None)} for p in perms])
 
-# -------------------- grant / revoke --------------------
+# -------------------- grant / revoke (now return user summary) --------------------
 
 @bp.post("/grant-role")
 @jwt_required()
@@ -283,11 +256,20 @@ def grant_role():
     role = db.session.scalar(select(Role).where(Role.code == role_code))
     if not user or not role:
         return _fail("User or role not found", 404)
+
     exists = db.session.scalar(select(UserRole).where(UserRole.user_id == user.id, UserRole.role_id == role.id))
     if not exists:
         db.session.add(UserRole(user_id=user.id, role_id=role.id))
         db.session.commit()
-    return _ok({"granted": True, "email": user_email, "role": role_code})
+
+    # reload roles for user summary
+    db.session.refresh(user)
+    user = db.session.get(User, user.id)
+    return _ok({
+        "granted": True,
+        "user": _user_row(user, with_roles=True, with_perms=False),
+        "role": {"id": role.id, "code": role.code, "name": getattr(role, "name", None)}
+    })
 
 @bp.post("/revoke-role")
 @jwt_required()
@@ -302,11 +284,19 @@ def revoke_role():
     role = db.session.scalar(select(Role).where(Role.code == role_code))
     if not user or not role:
         return _fail("User or role not found", 404)
+
     link = db.session.scalar(select(UserRole).where(UserRole.user_id == user.id, UserRole.role_id == role.id))
     if link:
         db.session.delete(link)
         db.session.commit()
-    return _ok({"revoked": True, "email": user_email, "role": role_code})
+
+    db.session.refresh(user)
+    user = db.session.get(User, user.id)
+    return _ok({
+        "revoked": True,
+        "user": _user_row(user, with_roles=True, with_perms=False),
+        "role": {"id": role.id, "code": role.code, "name": getattr(role, "name", None)}
+    })
 
 @bp.post("/grant-perm")
 @jwt_required()
@@ -321,11 +311,17 @@ def grant_perm():
     perm = db.session.scalar(select(Permission).where(Permission.code == perm_code))
     if not role or not perm:
         return _fail("Role or permission not found", 404)
+
     exists = db.session.scalar(select(RolePermission).where(RolePermission.role_id == role.id, RolePermission.perm_id == perm.id))
     if not exists:
         db.session.add(RolePermission(role_id=role.id, perm_id=perm.id))
         db.session.commit()
-    return _ok({"granted": True, "role": role_code, "perm": perm_code})
+
+    return _ok({
+        "granted": True,
+        "role": {"id": role.id, "code": role.code, "name": getattr(role, "name", None)},
+        "permission": {"id": perm.id, "code": perm.code, "name": getattr(perm, "name", None)}
+    })
 
 @bp.post("/revoke-perm")
 @jwt_required()
@@ -340,8 +336,14 @@ def revoke_perm():
     perm = db.session.scalar(select(Permission).where(Permission.code == perm_code))
     if not role or not perm:
         return _fail("Role or permission not found", 404)
+
     link = db.session.scalar(select(RolePermission).where(RolePermission.role_id == role.id, RolePermission.perm_id == perm.id))
     if link:
         db.session.delete(link)
         db.session.commit()
-    return _ok({"revoked": True, "role": role_code, "perm": perm_code})
+
+    return _ok({
+        "revoked": True,
+        "role": {"id": role.id, "code": role.code, "name": getattr(role, "name", None)},
+        "permission": {"id": perm.id, "code": perm.code, "name": getattr(perm, "name", None)}
+    })
