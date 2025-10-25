@@ -11,7 +11,19 @@ class PayRun(db.Model):
     cycle_id = db.Column(db.Integer, db.ForeignKey("pay_cycles.id"))
     period_start = db.Column(db.Date, nullable=False)
     period_end = db.Column(db.Date, nullable=False)
-    status = db.Column(db.Enum("draft", "locked", "posted", name="payrun_status_enum"), default="draft")
+    # Align statuses with API flow: draft -> calculated -> approved -> locked
+    # Keep 'posted' to avoid breaking existing rows, though it is unused by routes.
+    status = db.Column(
+        db.Enum(
+            "draft",
+            "calculated",
+            "approved",
+            "locked",
+            "posted",
+            name="payrun_status_enum",
+        ),
+        default="draft",
+    )
     retro_of_id = db.Column(db.Integer, db.ForeignKey("pay_runs.id"))
 
     created_by = db.Column(db.Integer, db.ForeignKey("users.id"))
