@@ -12,6 +12,10 @@ from datetime import timedelta, datetime
 from flask_jwt_extended import JWTManager
 
 
+
+from flask_migrate import Migrate
+migrate = Migrate()
+
 import click
 from flask.cli import with_appcontext
 
@@ -22,8 +26,9 @@ def create_app():
 
     # Config
     app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "dev-jwt-secret")
-    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=30)
+    app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=2)
     app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=7)
+    app.config["JWT_DECODE_LEEWAY"] = 120  # 2 minutes grace for clock skew
     app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv(
         "DATABASE_URL",
         "postgresql+psycopg2://postgres:4445@127.0.0.1:5432/hrms_dev",
@@ -41,6 +46,18 @@ def create_app():
     # Ensure models are loaded so metadata is complete
     with app.app_context():
         load_all()
+
+    migrate.init_app(app, db)
+
+    try:
+        from flask_migrate.cli import db as migrate_db_group
+        app.cli.add_command(migrate_db_group)
+    except Exception:
+        try:
+            from flask_migrate import cli as migrate_cli
+            app.cli.add_command(migrate_cli.db)
+        except Exception:
+            pass
 
     # Blueprints
     from hrms_api.blueprints.health import bp as health_bp
@@ -68,7 +85,15 @@ def create_app():
     from .rbac import bp as rbac_bp
     from hrms_api.common.errors import bp_errors
     from hrms_api.blueprints import security_admin
-
+    #Payroll And Compliences 
+    from hrms_api.blueprints.trades import bp as trades_bp
+    from hrms_api.blueprints.pay_cycles import bp as pay_cycles_bp
+    from hrms_api.blueprints.pay_policies import bp as pay_policies_bp
+    from hrms_api.blueprints.pay_profiles import bp as pay_profiles_bp
+    from hrms_api.blueprints.pay_runs import bp as pay_runs_bp
+    from hrms_api.blueprints.pay_compliance import bp as pay_compliance_bp
+    from hrms_api.blueprints.attendance_rollup import bp as attendance_rollup_bp
+    from hrms_api.blueprints.pay_adjustments import bp as pay_adjustments_bp
 
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
@@ -94,7 +119,17 @@ def create_app():
     app.register_blueprint(security_bp)
     app.register_blueprint(rbac_bp)
     app.register_blueprint(bp_errors)
+    app.register_blueprint(trades_bp)
     app.register_blueprint(security_admin.bp)
+    app.register_blueprint(pay_cycles_bp)
+    app.register_blueprint(pay_policies_bp)
+    app.register_blueprint(pay_profiles_bp)
+    app.register_blueprint(pay_runs_bp)
+    app.register_blueprint(pay_compliance_bp)
+    app.register_blueprint(attendance_rollup_bp)
+    app.register_blueprint(pay_adjustments_bp)
+
+
     # in hrms_api/__init__.py (inside create_app, after app.register_blueprint(rbac_bp))
     with app.app_context():
         try:
