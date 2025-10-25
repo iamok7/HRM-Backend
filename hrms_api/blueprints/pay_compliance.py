@@ -3,14 +3,16 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Any, Dict, Optional, Tuple, List
 
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
 from sqlalchemy import or_
 from sqlalchemy.sql.sqltypes import String, Date, Boolean, JSON as _JSON
 from hrms_api.extensions import db
 from hrms_api.common.auth import requires_perms
 
 from hrms_api.models.payroll.pay_run import PayRun, PayRunItem
-from hrms_api.models.payroll.compliance import ComplianceEvent as ConfigModel  # your single table
+# Use StatConfig as the configuration table for statutory settings (PF/ESI/PT/LWF)
+from hrms_api.models.payroll.stat_config import StatConfig as ConfigModel  # mapping auto-detects column names
+from sqlalchemy.sql.sqltypes import JSON as _JSON
 
 bp = Blueprint("pay_compliance", __name__, url_prefix="/api/v1/compliance")
 
@@ -240,7 +242,8 @@ def _calc_pf(item: PayRunItem, on: date, scope="IN") -> Tuple[Decimal, Decimal]:
     rate_er  = Decimal(str(cfg_er.get("rate", 0)))
     cap = Decimal(str(cfg_emp.get("wage_cap", 0))) if cfg_emp.get("wage_cap") else None
     tag = (cfg_emp.get("wage_tag") or "BASIC").upper()
-    basic = _pick_basic_from_components(getattr(item, "components", None), tag)
+    comps = getattr(item, ITEM_COMPONENTS_F, None) if ITEM_COMPONENTS_F else None
+    basic = _pick_basic_from_components(comps, tag)
     pf_wage = min(basic, cap) if cap else basic
     return (pf_wage * rate_emp).quantize(Decimal("0.01")), (pf_wage * rate_er).quantize(Decimal("0.01"))
 
@@ -278,20 +281,15 @@ def _calc_lwf_mh(item: PayRunItem, on: date) -> Tuple[Decimal, Decimal]:
 def _compose_components(base: List[Dict[str, Any]], adds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return list(base or []) + list(adds or [])
 
-@bp.get("/preview")
-@requires_perms("payroll.compliance.read")
-def preview_run():
-    run_id = request.args.get("run_id")
-    if not run_id: return _fail("run_id is required", 422)
-    state = (request.args.get("state") or "MH").upper()
-
+def _build_preview(run_id: int, state: str) -> Dict[str, Any]:
     r = PayRun.query.get_or_404(int(run_id))
     snap = r.period_end or r.period_start
 
     items = PayRunItem.query.filter_by(pay_run_id=r.id).all()
-    if not items: return _fail("Run has no items. Calculate the run first.", 422)
+    if not items:
+        raise ValueError("Run has no items. Calculate the run first.")
 
-    result = []
+    result: List[Dict[str, Any]] = []
     totals = {"pf_emp": Decimal("0"), "pf_er": Decimal("0"),
               "esi_emp": Decimal("0"), "esi_er": Decimal("0"),
               "pt": Decimal("0"), "lwf_emp": Decimal("0"), "lwf_er": Decimal("0")}
@@ -316,7 +314,9 @@ def preview_run():
         try:
             if state == "MH":
                 pt = _calc_pt_mh(it, snap)
-                if pt: comp_add.append({"code":"PT_MH","amount":_as_float(pt)}); totals["pt"] += pt
+                if pt:
+                    comp_add.append({"code":"PT_MH","amount":_as_float(pt)})
+                    totals["pt"] += pt
         except KeyError:
             if "PT" not in missing: missing.append("PT")
         try:
@@ -344,7 +344,19 @@ def preview_run():
         })
 
     out = {"items": result, "totals": {k:_as_float(v) for k,v in totals.items()}, "missing_config": missing or None}
-    if missing:
+    return out
+
+@bp.get("/preview")
+@requires_perms("payroll.compliance.read")
+def preview_run():
+    run_id = request.args.get("run_id")
+    if not run_id: return _fail("run_id is required", 422)
+    state = (request.args.get("state") or "MH").upper()
+    try:
+        out = _build_preview(int(run_id), state)
+    except ValueError as e:
+        return _fail(str(e), 422)
+    if out.get("missing_config"):
         return _fail("Missing statutory config. See 'extra.missing_config' to seed required entries.", 422, extra=out)
     return _ok(out)
 
@@ -359,17 +371,22 @@ def apply_to_run():
     if r.status not in ("calculated", "approved"):
         return _fail(f"Run in status '{r.status}' cannot apply compliance. Recalculate/approve first.", 409)
 
-    # reuse preview logic
-    with bp.test_request_context(query_string={"run_id": str(run_id), "state": j.get("state", "MH")}):
-        resp, status = preview_run()
-    if status != 200: return resp, status
-    prev = resp.get_json()["data"]
+    # reuse preview logic without requiring JWT twice
+    try:
+        prev = _build_preview(int(run_id), (j.get("state") or "MH").upper())
+    except ValueError as e:
+        return _fail(str(e), 422)
+    if prev.get("missing_config"):
+        return _fail("Missing statutory config. See 'extra.missing_config' to seed required entries.", 422, extra=prev)
 
     applied = 0
     for it_prev in prev["items"]:
         it = PayRunItem.query.get(it_prev["item_id"])
         if not it: continue
-        it.components = _compose_components(getattr(it, "components", None) or [], it_prev["add_components"])
+        base = getattr(it, ITEM_COMPONENTS_F, None) if ITEM_COMPONENTS_F else None
+        newc = _compose_components(base or [], it_prev["add_components"])
+        if ITEM_COMPONENTS_F:
+            setattr(it, ITEM_COMPONENTS_F, newc)
         gross = Decimal(str(getattr(it, "gross", 0) or 0))
         emp_deductions = Decimal("0")
         for c in it_prev["add_components"]:
@@ -385,3 +402,19 @@ def apply_to_run():
 
     db.session.commit()
     return _ok({"items_updated": applied, "run": {"id": r.id, "status": r.status}})
+# Determine which JSON column on PayRunItem stores components (fallback to any JSON field)
+def _pick_item_components_field() -> Optional[str]:
+    cols = list(PayRunItem.__table__.columns.items())
+    # Prefer names containing component keywords and of JSON type
+    for name, col in cols:
+        nm = name.lower()
+        if any(k in nm for k in ("components","component_json","breakup","breakdown")):
+            if isinstance(col.type, _JSON):
+                return name
+    # Fallback: any JSON column
+    for name, col in cols:
+        if isinstance(col.type, _JSON):
+            return name
+    return None
+
+ITEM_COMPONENTS_F = _pick_item_components_field()

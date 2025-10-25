@@ -472,6 +472,27 @@ def calculate_run(run_id: int):
     db.session.commit()
     return _ok({"run": _row_run(r), "items": count})
 
+@bp.get("/<int:run_id>/items")
+@requires_perms("payroll.run.read")
+def list_run_items(run_id: int):
+    """List PayRunItem rows for the given run.
+    Supports optional "employee_id" filter and pagination via page/size.
+    """
+    r = PayRun.query.get_or_404(run_id)
+    q = PayRunItem.query.filter_by(**{ITEM_RUN_ID_F: r.id})
+
+    emp_q = (request.args.get("employee_id") or "").strip()
+    if emp_q:
+        try:
+            q = q.filter(getattr(PayRunItem, ITEM_EMP_ID_F) == int(emp_q))
+        except Exception:
+            return _fail("employee_id must be integer", 422)
+
+    page, size = _page_limit()
+    total = q.count()
+    rows = q.order_by(PayRunItem.id.asc()).offset((page-1)*size).limit(size).all()
+    return _ok([_row_item(x) for x in rows], meta={"page": page, "size": size, "total": total})
+
 @bp.post("/<int:run_id>/approve")
 @requires_perms("payroll.run.write")
 def approve_run(run_id: int):
@@ -502,6 +523,26 @@ def lock_run(run_id: int):
         _set_status(r, RUN_STATUS_F, "locked")
     if RUN_LOCKED_AT:
         setattr(r, RUN_LOCKED_AT, datetime.utcnow())
+
+    db.session.commit()
+    return _ok(_row_run(r))
+
+@bp.post("/<int:run_id>/unlock")
+@requires_perms("payroll.run.write")
+def unlock_run(run_id: int):
+    """Reopen a locked run back to 'approved' to allow further actions.
+    Only allowed from status 'locked'. Clears locked_at if present.
+    """
+    r = PayRun.query.get_or_404(run_id)
+    try:
+        _ensure_status(r, ("locked",))
+    except ValueError as e:
+        return _fail(str(e), 409)
+
+    if RUN_STATUS_F:
+        _set_status(r, RUN_STATUS_F, "approved")
+    if RUN_LOCKED_AT:
+        setattr(r, RUN_LOCKED_AT, None)
 
     db.session.commit()
     return _ok(_row_run(r))
