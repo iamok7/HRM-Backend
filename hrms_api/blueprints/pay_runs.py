@@ -340,6 +340,19 @@ def _attendance_rollup(company_id: int, period_start: date, period_end: date) ->
     # Stub – plug real rollup here if needed
     return {}
 
+def _attendance_rollup_fetch(company_id: int, period_start: date, period_end: date) -> Dict[int, Dict[str, Any]]:
+    """Fetch attendance rollup for the run window using the attendance_rollup engine.
+    Returns { employee_id: { days_worked, lop_days, ot_hours, holidays, weekly_off } }.
+    """
+    try:
+        from hrms_api.blueprints.attendance_rollup import compute_rollup
+    except Exception:
+        return {}
+    try:
+        return compute_rollup(company_id, period_start, period_end, None)
+    except Exception:
+        return {}
+
 def _pick_policy(company_id: int, on_date: date) -> Optional[PayPolicy]:
     q = (PayPolicy.query
          .filter(PayPolicy.company_id == company_id)
@@ -427,7 +440,7 @@ def calculate_run(run_id: int):
         return _fail("No pay policy effective for company on the period end date", 422)
 
     # attendance snapshot (stubbed)
-    roll = _attendance_rollup(_get(r, RUN_COMPANY_F), _get(r, RUN_START_F), _get(r, RUN_END_F))
+    roll = _attendance_rollup_fetch(_get(r, RUN_COMPANY_F), _get(r, RUN_START_F), _get(r, RUN_END_F))
 
     # pick latest profile per employee effective on snap_date
     profs = (EmployeePayProfile.query

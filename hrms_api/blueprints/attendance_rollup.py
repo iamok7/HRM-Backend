@@ -126,22 +126,24 @@ def compute_rollup(company_id: Optional[int], d_from: date, d_to: date, emp_ids:
         return out
 
     # --- Strategy 2: attendance_punches fallback ---
-    if _has_table("attendance_punches") and _has_columns(
-        "attendance_punches",
-        ["employee_id", "punch_time"]
+    if _has_table("attendance_punches") and (
+        _has_columns("attendance_punches", ["employee_id", "punch_time"]) or
+        _has_columns("attendance_punches", ["employee_id", "ts"])  # our model uses 'ts'
     ):
         has_company = _has_columns("attendance_punches", ["company_id"])
         has_ot = _has_columns("attendance_punches", ["ot_hours"])
+        # choose timestamp column name
+        ts_col = "punch_time" if _has_columns("attendance_punches", ["punch_time"]) else "ts"
 
         sql = [
             "WITH days AS (",
-            " SELECT employee_id, DATE(punch_time) AS d,",
+            f" SELECT employee_id, DATE({ts_col}) AS d,",
         ]
         if has_ot:
             sql.append(" COALESCE(SUM(ot_hours),0) AS ot_hours")
         else:
             sql.append(" 0 AS ot_hours")
-        sql.append(" FROM attendance_punches WHERE punch_time::date BETWEEN :d_from AND :d_to")
+        sql.append(f" FROM attendance_punches WHERE {ts_col}::date BETWEEN :d_from AND :d_to")
 
         if company_id and has_company:
             sql.append(" AND company_id = :cid"); params["cid"] = int(company_id)
@@ -149,7 +151,7 @@ def compute_rollup(company_id: Optional[int], d_from: date, d_to: date, emp_ids:
         if emp_ids:
             sql.append(" AND employee_id = ANY(:emp_ids)"); params["emp_ids"] = emp_ids
 
-        sql.append(" GROUP BY employee_id, DATE(punch_time))")
+        sql.append(f" GROUP BY employee_id, DATE({ts_col}))")
         sql.append(" SELECT employee_id, COUNT(*) AS days_worked, 0 AS lop_days, COALESCE(SUM(ot_hours),0) AS ot_hours")
         sql.append(" , 0 AS holidays, 0 AS weekly_off")
         sql.append(" FROM days GROUP BY employee_id")

@@ -469,6 +469,75 @@ def rbac_user_inspect():
         "counts": {"roles": len(roles), "perms": len(perms)}
     })
 
+# -------- USER: RESET PASSWORD (HR/Admin) --------
+@bp.post("/users/reset-password")
+@jwt_required()
+def rbac_user_reset_password():
+    """
+    Reset a user's password (HR/Admin).
+    JSON (at least one identifier required):
+    {
+      "user_id": 42,            // OR
+      "email": "emp1@demo.local",
+      "password": "NewStrong#123"  // required, min 6 chars
+    }
+    """
+    # Authorization: allow if caller has perm 'users.password.reset' OR role in {'admin','hr'}
+    try:
+        ident = get_jwt_identity()
+        caller = db.session.get(User, int(ident)) if str(ident).isdigit() else None
+    except Exception:
+        caller = None
+    allowed = False
+    if caller is not None:
+        try:
+            roles = {getattr(r, 'code', '').lower() for r in getattr(caller, 'roles', [])}
+        except Exception:
+            roles = set()
+        if 'admin' in roles or 'hr' in roles:
+            allowed = True
+        else:
+            if 'users.password.reset' in _perm_set_for(caller.id):
+                allowed = True
+    if not allowed:
+        return _fail("Forbidden", status=403, code="auth.forbidden")
+
+    j = _json()
+    user_id = j.get("user_id")
+    email = (j.get("email") or "").strip().lower()
+    password = j.get("password") or j.get("new_password")
+
+    if not password or len(str(password)) < 6:
+        return _fail("password is required (min 6 characters)", 422)
+    if not user_id and not email:
+        return _fail("provide user_id or email", 422)
+
+    u = None
+    if user_id:
+        try:
+            u = db.session.get(User, int(user_id))
+        except Exception:
+            u = None
+    if not u and email:
+        u = User.query.filter_by(email=email).first()
+    if not u:
+        return _fail("user not found", 404)
+
+    if not _set_password(u, str(password)):
+        return _fail("unable to set password", 500)
+
+    try:
+        db.session.add(u)
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return _fail("database error", 500)
+
+    return _ok({
+        "message": "password reset",
+        "user": {"id": u.id, "email": u.email}
+    })
+
 # ===== SESSION / TOKEN SETTINGS =====
 from datetime import datetime, timedelta, timezone
 from sqlalchemy import Column, Integer, DateTime, String
@@ -782,7 +851,7 @@ def rbac_ensure_defaults():
     perm_codes = [
         "employees.read","employees.create","employees.update",
         "master.locations.read","master.departments.read",
-        "attendance.read","leave.read","rbac.manage"
+        "attendance.read","leave.read","rbac.manage","users.password.reset"
     ]
     perms = {c: ensure_perm(c) for c in perm_codes}
     db.session.commit()
@@ -804,8 +873,10 @@ def rbac_ensure_defaults():
     grant(r_hr, perms["employees.update"])
     grant(r_hr, perms["master.locations.read"])
     grant(r_hr, perms["master.departments.read"])
+    grant(r_hr, perms["users.password.reset"])
 
     grant(r_admin, perms["rbac.manage"])
+    grant(r_admin, perms["users.password.reset"])
 
     db.session.commit()
     return _ok({
