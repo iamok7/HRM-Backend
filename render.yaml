@@ -4,13 +4,7 @@
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: |
-      /bin/sh -lc '
-        python -m flask db upgrade &&
-        python -m flask seed-core &&
-        python -m flask seed-rbac &&
-        exec gunicorn "hrms_api.wsgi:app" --bind 0.0.0.0:$PORT --workers 2 --timeout 120
-      '
+    startCommand: python3 -m flask db upgrade && python3 -m flask seed-core && python3 -m flask seed-rbac && gunicorn "hrms_api.wsgi:app" --bind 0.0.0.0:$PORT --workers 2 --timeout 120
     autoDeploy: true
     envVars:
       - key: FLASK_APP
