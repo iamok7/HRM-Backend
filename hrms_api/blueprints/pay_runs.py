@@ -237,6 +237,41 @@ def _ensure_cycle_for_company(company_id: int) -> Optional[PayCycle]:
         db.session.rollback()
         return None
 
+def _ensure_policy_for_company(company_id: int, on_date: date) -> Optional[PayPolicy]:
+    """Return active PayPolicy for date or create a default one.
+    Defaults align with model defaults to keep behavior predictable.
+    """
+    try:
+        company_id = int(company_id)
+    except Exception:
+        return None
+    # Reuse if one already covers on_date
+    cur = _pick_policy(company_id, on_date)
+    if cur:
+        return cur
+    # Create default policy effective from start of the month
+    try:
+        eff_from = date(on_date.year, on_date.month, 1)
+    except Exception:
+        eff_from = on_date
+    try:
+        p = PayPolicy(
+            company_id=company_id,
+            holiday_paid=True,
+            weekly_off_paid=True,
+            monthly_fixed_paid_leaves=2,
+            daily_paid_leave_allowed=False,
+            ot_factor_default=Decimal("2.00"),
+            min_wage_check=True,
+            effective_from=eff_from,
+            effective_to=None,
+        )
+        db.session.add(p)
+        db.session.commit()
+        return p
+    except Exception:
+        db.session.rollback()
+        return None
 def _ensure_status(r: PayRun, allowed: Iterable[str]):
     st = (_get(r, RUN_STATUS_F) or "draft")
     if st not in allowed:
@@ -489,6 +524,8 @@ def calculate_run(run_id: int):
     snap_date = _get(r, RUN_END_F) or _get(r, RUN_START_F)
 
     policy = _pick_policy(_get(r, RUN_COMPANY_F), snap_date)
+    if not policy:
+        policy = _ensure_policy_for_company(_get(r, RUN_COMPANY_F), snap_date)
     if not policy:
         return _fail("No pay policy effective for company on the period end date", 422)
 
