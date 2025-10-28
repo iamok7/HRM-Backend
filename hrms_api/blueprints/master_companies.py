@@ -6,6 +6,7 @@ from flask_jwt_extended import jwt_required
 from sqlalchemy import asc, desc, or_
 from hrms_api.extensions import db
 from hrms_api.models.master import Company
+from hrms_api.models.payroll.cycle import PayCycle
 from hrms_api.common.auth import requires_perms  # RBAC
 
 bp = Blueprint("master_companies", __name__, url_prefix="/api/v1/master/companies")
@@ -163,6 +164,24 @@ def create_company():
 
     db.session.add(obj)
     db.session.commit()
+
+    # Ensure a default pay cycle exists for this company so payroll can run without manual seeding
+    try:
+        has_cycle = PayCycle.query.filter(PayCycle.company_id == obj.id).first()
+        if not has_cycle:
+            c = PayCycle(
+                company_id=obj.id,
+                period_anchor_day=1,
+                payday_rule={"type": "FIXED_DAY", "day": 5},
+                timezone="Asia/Kolkata",
+                active=True,
+            )
+            db.session.add(c)
+            db.session.commit()
+    except Exception:
+        db.session.rollback()
+        # Swallow errors here; company creation should not fail due to cycle bootstrap
+
     return _ok(_row(obj), 201)
 
 @bp.put("/<int:comp_id>")

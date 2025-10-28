@@ -111,6 +111,9 @@ RUN_APPROVED_AT = "approved_at" if hasattr(PayRun, "approved_at") else None
 RUN_LOCKED_AT   = "locked_at" if hasattr(PayRun, "locked_at") else None
 RUN_TOTALS_F    = "totals" if hasattr(PayRun, "totals") else None
 
+# Optional display name for the cycle on PayRun
+RUN_CYCLE_NAME_F = _pick(PayRun, ["pay_cycle_name", "cycle_name", "run_name"], prefer_type=String)
+
 def _set_status(obj, field_name: str, value: str):
     """
     Safely set ENUM-backed status columns.
@@ -179,6 +182,7 @@ def _row_run(r: PayRun) -> Dict[str, Any]:
         "id": r.id,
         "company_id": _get(r, RUN_COMPANY_F),
         "pay_cycle_id": _get(r, RUN_CYCLE_F),
+        "pay_cycle_name": _get(r, RUN_CYCLE_NAME_F),
         "period_start": _get(r, RUN_START_F).isoformat() if _get(r, RUN_START_F) else None,
         "period_end": _get(r, RUN_END_F).isoformat() if _get(r, RUN_END_F) else None,
         "status": _get(r, RUN_STATUS_F),
@@ -204,6 +208,35 @@ def _row_item(x: PayRunItem) -> Dict[str, Any]:
         "remarks": getattr(x, ITEM_REMARKS_F, None) if ITEM_REMARKS_F else None,
     }
 
+# ---------- ensure pay cycle helper ----------
+def _ensure_cycle_for_company(company_id: int) -> Optional[PayCycle]:
+    """Return an existing PayCycle for the company or create a sensible default.
+    Default: anchor day 1, timezone Asia/Kolkata, payday 5th, active True.
+    """
+    try:
+        company_id = int(company_id)
+    except Exception:
+        return None
+    q = PayCycle.query.filter(PayCycle.company_id == company_id)
+    cur = q.filter(PayCycle.active.is_(True)).order_by(PayCycle.id.desc()).first() or \
+          q.order_by(PayCycle.id.desc()).first()
+    if cur:
+        return cur
+    try:
+        c = PayCycle(
+            company_id=company_id,
+            period_anchor_day=1,
+            payday_rule={"type": "FIXED_DAY", "day": 5},
+            timezone="Asia/Kolkata",
+            active=True,
+        )
+        db.session.add(c)
+        db.session.commit()
+        return c
+    except Exception:
+        db.session.rollback()
+        return None
+
 def _ensure_status(r: PayRun, allowed: Iterable[str]):
     st = (_get(r, RUN_STATUS_F) or "draft")
     if st not in allowed:
@@ -220,24 +253,42 @@ def create_run():
     j = request.get_json(silent=True) or {}
     company_id = j.get("company_id")
     cycle_id   = j.get("pay_cycle_id")
+    cycle_name = (j.get("pay_cycle_name") or "").strip() or None
     pstart     = _d(j.get("period_start"))
     pend       = _d(j.get("period_end"))
     note_in    = (j.get("note") or "").strip() or None
 
     if not (company_id and pstart and pend):
         return _fail("company_id, period_start, period_end are required", 422)
-    if RUN_CYCLE_F and not cycle_id:
-        return _fail("pay_cycle_id is required", 422)
     if pend < pstart:
         return _fail("period_end must be >= period_start", 422)
-
-    if RUN_CYCLE_F and PayCycle.query.get(cycle_id) is None:
-        return _fail("pay_cycle_id not found", 404)
+    # Resolve cycle automatically if ID not given
+    if RUN_CYCLE_F and not cycle_id:
+        q = PayCycle.query.filter(PayCycle.company_id == int(company_id))
+        auto = (q.filter(PayCycle.active.is_(True)).order_by(PayCycle.id.desc()).first()
+                or q.order_by(PayCycle.id.desc()).first())
+        if auto is None:
+            auto = _ensure_cycle_for_company(company_id)
+        if auto is None:
+            return _fail("No pay cycle found for company to auto-select", 422)
+        cycle_id = auto.id
+    if RUN_CYCLE_F and cycle_id:
+        cyc = PayCycle.query.get(cycle_id)
+        if cyc is None:
+            return _fail("pay_cycle_id not found", 404)
+        # Safety: ensure the chosen cycle belongs to the same company
+        try:
+            if int(company_id) != int(getattr(cyc, "company_id", 0)):
+                return _fail("pay_cycle_id belongs to a different company", 422)
+        except Exception:
+            return _fail("invalid company_id or pay_cycle_id", 422)
 
     kwargs: Dict[str, Any] = {}
     kwargs[RUN_COMPANY_F] = int(company_id)
     if RUN_CYCLE_F:
         kwargs[RUN_CYCLE_F] = int(cycle_id)
+    if RUN_CYCLE_NAME_F and cycle_name:
+        kwargs[RUN_CYCLE_NAME_F] = cycle_name
     kwargs[RUN_START_F] = pstart
     kwargs[RUN_END_F]   = pend
     if RUN_NOTE_F and note_in:
@@ -328,6 +379,8 @@ def patch_run(run_id: int):
 
     if "note" in j and RUN_NOTE_F:
         setattr(r, RUN_NOTE_F, (j.get("note") or "").strip() or None)
+    if RUN_CYCLE_NAME_F and "pay_cycle_name" in j:
+        setattr(r, RUN_CYCLE_NAME_F, (j.get("pay_cycle_name") or "").strip() or None)
 
     if RUN_UPDATED_AT:
         setattr(r, RUN_UPDATED_AT, datetime.utcnow())

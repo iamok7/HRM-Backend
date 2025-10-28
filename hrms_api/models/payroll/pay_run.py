@@ -9,6 +9,8 @@ class PayRun(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     company_id = db.Column(db.Integer, db.ForeignKey("companies.id"), nullable=False)
     cycle_id = db.Column(db.Integer, db.ForeignKey("pay_cycles.id"))
+    # Optional display name set by client for the cycle used in this run
+    pay_cycle_name = db.Column(db.String(255))
     period_start = db.Column(db.Date, nullable=False)
     period_end = db.Column(db.Date, nullable=False)
     # Align statuses with API flow: draft -> calculated -> approved -> locked
