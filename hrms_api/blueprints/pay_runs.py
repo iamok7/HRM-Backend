@@ -458,9 +458,17 @@ def _active_profile(employee_id: int, on_date: date) -> Optional[EmployeePayProf
     return q.first()
 
 def _trade_rate(profile: EmployeePayProfile, on_date: date) -> Tuple[Optional[Decimal], Optional[Decimal]]:
-    if getattr(profile, "per_day_rate", None) or getattr(profile, "ot_rate", None):
-        return (_dec(getattr(profile, "per_day_rate", None)),
-                _dec(getattr(profile, "ot_rate", None)))
+    # Support multiple schema variants: per_day_rate/ot_rate or per_day_override/ot_rate_override
+    if (getattr(profile, "per_day_rate", None) is not None) or (getattr(profile, "ot_rate", None) is not None):
+        return (
+            _dec(getattr(profile, "per_day_rate", None)),
+            _dec(getattr(profile, "ot_rate", None)),
+        )
+    if (getattr(profile, "per_day_override", None) is not None) or (getattr(profile, "ot_rate_override", None) is not None):
+        return (
+            _dec(getattr(profile, "per_day_override", None)),
+            _dec(getattr(profile, "ot_rate_override", None)),
+        )
     code  = getattr(profile, "trade_code", None)
     cat_id= getattr(profile, "category_id", None)
     q = TradeCategory.query
@@ -494,7 +502,11 @@ def _calc_employee(emp: Employee, policy: PayPolicy, prof: EmployeePayProfile, s
         if ot_amt > 0:
             comps.append({"code": "OT", "amount": float(ot_amt)})
     else:  # monthly_fixed default
-        base = _dec(getattr(prof, "base_monthly", None)) or Decimal("0")
+        # Accept either base_monthly or monthly_gross
+        base = _dec(getattr(prof, "base_monthly", None))
+        if base is None:
+            base = _dec(getattr(prof, "monthly_gross", None))
+        base = base or Decimal("0")
         basic = base - (base / Decimal("30")) * lop_days
         if basic < 0: basic = Decimal("0")
         gross = basic
@@ -539,6 +551,37 @@ def calculate_run(run_id: int):
                             EmployeePayProfile.effective_to >= snap_date))
              .all())
     emp_ids = list({p.employee_id for p in profs})
+    if not emp_ids:
+        # Bootstrap minimal monthly profiles for active employees of the company (Render/empty DB convenience)
+        try:
+            comp_id = _get(r, RUN_COMPANY_F)
+            # active during window: doj <= end and (dol is null or dol >= start), status active if column exists
+            q_emp = Employee.query.filter(Employee.company_id == comp_id)
+            if hasattr(Employee, "status"):
+                q_emp = q_emp.filter(Employee.status == "active")
+            if hasattr(Employee, "doj"):
+                q_emp = q_emp.filter(db.or_(Employee.doj.is_(None), Employee.doj <= (_get(r, RUN_END_F) or snap_date)))
+            if hasattr(Employee, "dol"):
+                q_emp = q_emp.filter(db.or_(Employee.dol.is_(None), Employee.dol >= (_get(r, RUN_START_F) or snap_date)))
+            emps_boot = q_emp.all()
+            if emps_boot:
+                eff_from = date(snap_date.year, snap_date.month, 1)
+                for e in emps_boot:
+                    db.session.add(EmployeePayProfile(
+                        employee_id=e.id,
+                        pay_type="monthly_fixed",
+                        effective_from=eff_from,
+                        effective_to=None,
+                    ))
+                db.session.commit()
+                profs = (EmployeePayProfile.query
+                         .filter(EmployeePayProfile.effective_from <= snap_date)
+                         .filter(db.or_(EmployeePayProfile.effective_to.is_(None), EmployeePayProfile.effective_to >= snap_date))
+                         .all())
+                emp_ids = list({p.employee_id for p in profs})
+        except Exception:
+            db.session.rollback()
+            emp_ids = []
     if not emp_ids:
         return _fail("No active employee pay profiles found for this period", 422)
 
