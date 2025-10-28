@@ -4,7 +4,13 @@
     env: python
     plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn "hrms_api.wsgi:app" --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    startCommand: |
+      /bin/sh -lc '
+        python -m flask db upgrade &&
+        python -m flask seed-core &&
+        python -m flask seed-rbac &&
+        exec gunicorn "hrms_api.wsgi:app" --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+      '
     autoDeploy: true
     envVars:
       - key: FLASK_APP
@@ -21,10 +27,6 @@
         fromDatabase:
           name: hrms-pg
           property: connectionString
-    postDeployCommand: |
-      python -m flask db upgrade && \
-      python -m flask seed-core && \
-      python -m flask seed-rbac
 
 databases:
   - name: hrms-pg
