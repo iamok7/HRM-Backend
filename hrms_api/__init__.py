@@ -279,6 +279,93 @@ def create_app():
             db.session.add(UserRole(user_id=u.id, role_id=admin.id)); db.session.commit()
         click.echo("Seeded role 'admin' and linked to admin@demo.local")
 
+    # ---------------- Compliance CLI ----------------
+    @app.cli.group("compliance")
+    def compliance_group():
+        """Compliance related utilities."""
+        pass
+
+    @compliance_group.command("seed-defaults")
+    @click.option("--state", "state_opt", required=True, help="State code e.g. MH")
+    @click.option("--company-id", "company_id_opt", type=int, required=True, help="Company ID")
+    def compliance_seed_defaults(state_opt: str, company_id_opt: int):
+        """Insert default PF/ESI/PT StatConfig records with effective_from = first of current FY.
+
+        This seeds the new versioned config rows (type/scope/priority). It does not modify legacy key-based rows.
+        """
+        from datetime import date
+        from hrms_api.models.master import Company
+        from hrms_api.models.payroll.stat_config import StatConfig
+
+        # Resolve FY start (India): 1 Apr current FY
+        today = date.today()
+        fy_year = today.year if today.month >= 4 else today.year - 1
+        eff_from = date(fy_year, 4, 1)
+
+        # Quick company existence check (non-fatal)
+        comp = Company.query.get(company_id_opt)
+        if not comp:
+            click.echo(f"Warning: company_id={company_id_opt} not found. Proceeding to insert configs anyway.")
+
+        # PF default
+        pf_json = {
+            "emp_rate": 0.12,
+            "er_eps_rate": 0.0833,
+            "er_epf_rate": 0.0367,
+            "wage_cap": 15000,
+            "base_tag": "BASIC_DA",
+            "voluntary_max": 0.12,
+        }
+        db.session.add(StatConfig(
+            type="PF",
+            scope_company_id=company_id_opt,
+            scope_state=state_opt.upper(),
+            priority=100,
+            effective_from=eff_from,
+            value_json=pf_json,
+            key="STATCFG_V2_PF",
+        ))
+
+        # ESI default
+        esi_json = {
+            "emp_rate": 0.0075,
+            "er_rate": 0.0325,
+            "threshold": 21000,
+            "entry_rule": "period_locking",
+        }
+        db.session.add(StatConfig(
+            type="ESI",
+            scope_company_id=company_id_opt,
+            scope_state=state_opt.upper(),
+            priority=100,
+            effective_from=eff_from,
+            value_json=esi_json,
+            key="STATCFG_V2_ESI",
+        ))
+
+        # PT (MH defaults only)
+        pt_json = {
+            "state": state_opt.upper(),
+            "slabs": [
+                {"min": 0, "max": 7500, "amount": 0},
+                {"min": 7501, "max": 10000, "amount": 175},
+                {"min": 10001, "max": 9999999, "amount": 200},
+            ],
+            "double_month": None,
+        }
+        db.session.add(StatConfig(
+            type="PT",
+            scope_company_id=company_id_opt,
+            scope_state=state_opt.upper(),
+            priority=100,
+            effective_from=eff_from,
+            value_json=pt_json,
+            key="STATCFG_V2_PT",
+        ))
+
+        db.session.commit()
+        click.echo(f"Seeded: PF, ESI, PT for company_id={company_id_opt}, state={state_opt.upper()} from {eff_from.isoformat()}")
+
         @app.cli.command("seed-employees-10")
         def seed_employees_10():
             """

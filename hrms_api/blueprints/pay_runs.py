@@ -59,6 +59,36 @@ def _dec(x) -> Optional[Decimal]:
     except Exception:
         return None
 
+
+# ---- pay cycle resolution helper ----
+def _resolve_pay_cycle(company_id: int, pstart: date, pend: date) -> Optional[PayCycle]:
+    """
+    Auto-resolve pay cycle by (company_id, period window).
+    Order: matching active (effective window contains range) by lowest priority, latest effective_from;
+    fallback: any active by same order.
+    Returns None if no active cycles exist for the company.
+    """
+    q_base = PayCycle.query.filter(PayCycle.company_id == int(company_id), PayCycle.active.is_(True))
+    # Try effective window match if columns present (they are optional for back-compat)
+    if hasattr(PayCycle, 'effective_from') and hasattr(PayCycle, 'effective_to'):
+        q_match = (q_base.filter((PayCycle.effective_from.is_(None)) | (PayCycle.effective_from <= pstart))
+                         .filter((PayCycle.effective_to.is_(None)) | (PayCycle.effective_to >= pend)))
+        # Order by priority asc, effective_from desc, id desc
+        if hasattr(PayCycle, 'priority'):
+            q_match = q_match.order_by(PayCycle.priority.asc(), PayCycle.effective_from.desc().nullslast(), PayCycle.id.desc())
+        else:
+            q_match = q_match.order_by(PayCycle.id.desc())
+        best = q_match.first()
+        if best:
+            return best
+    # Fallback to any active=True
+    q_any = q_base
+    if hasattr(PayCycle, 'priority') and hasattr(PayCycle, 'effective_from'):
+        q_any = q_any.order_by(PayCycle.priority.asc(), PayCycle.effective_from.desc().nullslast(), PayCycle.id.desc())
+    else:
+        q_any = q_any.order_by(PayCycle.id.desc())
+    return q_any.first()
+
 # ---- model introspection (map client fields -> real columns) ----
 def _cols(model):
     return list(model.__table__.columns.items())
@@ -299,13 +329,12 @@ def create_run():
         return _fail("period_end must be >= period_start", 422)
     # Resolve cycle automatically if ID not given
     if RUN_CYCLE_F and not cycle_id:
-        q = PayCycle.query.filter(PayCycle.company_id == int(company_id))
-        auto = (q.filter(PayCycle.active.is_(True)).order_by(PayCycle.id.desc()).first()
-                or q.order_by(PayCycle.id.desc()).first())
+        auto = _resolve_pay_cycle(int(company_id), pstart, pend)
         if auto is None:
+            # Try soft-create default if helper exists; else error
             auto = _ensure_cycle_for_company(company_id)
         if auto is None:
-            return _fail("No pay cycle found for company to auto-select", 422)
+            return _fail(f"No active pay cycle found for company={company_id}. Create one via POST /api/v1/pay-cycles.", 422)
         cycle_id = auto.id
     if RUN_CYCLE_F and cycle_id:
         cyc = PayCycle.query.get(cycle_id)
