@@ -1,8 +1,10 @@
 # hrms_api/extensions.py
 import os
 from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
 
 db = SQLAlchemy()
+migrate = Migrate()
 
 def normalize_db_url(url: str) -> str:
     if not url:

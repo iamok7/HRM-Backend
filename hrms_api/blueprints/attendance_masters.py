@@ -1,4 +1,3 @@
-# hrms_api/blueprints/attendance_masters.py
 from __future__ import annotations
 
 from datetime import datetime, date, time
@@ -95,6 +94,15 @@ def _parse_date(s, field):
     except Exception:
         raise ValueError(f"{field} must be YYYY-MM-DD")
 
+def _get_company_arg() -> str | None:
+    """Return company_id string from either company_id or companyId query/body."""
+    return (request.args.get("company_id")
+            or request.args.get("companyId"))
+
+def _get_location_arg() -> str | None:
+    return (request.args.get("location_id")
+            or request.args.get("locationId"))
+
 # ========================= SHIFTS =========================
 def _shift_row(s: Shift):
     is_night = bool(getattr(s, "is_night", getattr(s, "is_night_shift", False)))
@@ -117,21 +125,54 @@ def _shift_row(s: Shift):
 @jwt_required()
 @requires_perms("attendance.shift.read")
 def list_shifts():
+    """
+    GET /api/v1/attendance/masters/shifts
+      ?company_id=1 | companyId=1
+      &q=General
+      &is_active=true|false
+      &page=1&size=20
+
+    Example response:
+    {
+      "success": true,
+      "data": [
+        {
+          "id": 1,
+          "company_id": 1,
+          "name": "General",
+          "code": "GEN",
+          "start_time": "09:00",
+          "end_time": "18:00",
+          "break_minutes": 60,
+          "grace_minutes": 15,
+          "is_night": false,
+          "is_active": true,
+          "created_at": "...",
+          "updated_at": "..."
+        }
+      ],
+      "meta": { "page": 1, "size": 20, "total": 1 }
+    }
+    """
     q = Shift.query
 
     # filters
     try:
-        cid = _as_int(request.args.get("company_id"), "company_id") if "company_id" in request.args else None
+        cid_raw = _get_company_arg()
+        cid = _as_int(cid_raw, "company_id") if cid_raw is not None else None
     except ValueError as ex:
         return _fail(str(ex), 422)
-    if cid: q = q.filter(Shift.company_id == cid)
+    if cid:
+        q = q.filter(Shift.company_id == cid)
 
     try:
         is_active = _as_bool(request.args.get("is_active"), "is_active") if "is_active" in request.args else None
     except ValueError as ex:
         return _fail(str(ex), 422)
-    if is_active is True: q = q.filter(Shift.is_active.is_(True))
-    if is_active is False: q = q.filter(Shift.is_active.is_(False))
+    if is_active is True and hasattr(Shift, "is_active"):
+        q = q.filter(Shift.is_active.is_(True))
+    if is_active is False and hasattr(Shift, "is_active"):
+        q = q.filter(Shift.is_active.is_(False))
 
     s = (request.args.get("q") or "").strip()
     if s:
@@ -171,11 +212,30 @@ def get_shift(sid: int):
 @jwt_required()
 @requires_perms("attendance.shift.create")
 def create_shift():
+    """
+    POST /api/v1/attendance/masters/shifts
+
+    Body:
+    {
+      "companyId": 1,            // or "company_id"
+      "name": "General",
+      "code": "GEN",
+      "start_time": "09:00",
+      "end_time": "18:00",
+      "break_minutes": 60,
+      "grace_minutes": 15,
+      "is_night": false,
+      "is_active": true
+    }
+    """
     d = request.get_json(silent=True, force=True) or {}
+    # accept companyId or company_id
+    raw_cid = d.get("company_id", d.get("companyId"))
     try:
-        cid = _as_int(d.get("company_id"), "company_id")
+        cid = _as_int(raw_cid, "companyId/company_id")
     except ValueError as ex:
         return _fail(str(ex), 422)
+
     name = (d.get("name") or "").strip()
     if not (cid and name): return _fail("company_id and name are required", 422)
 
@@ -230,13 +290,19 @@ def create_shift():
 @jwt_required()
 @requires_perms("attendance.shift.update")
 def update_shift(sid: int):
+    """
+    PUT /api/v1/attendance/masters/shifts/{id}
+
+    Body: same fields as create (all optional, will be updated if present).
+    """
     s = Shift.query.get(sid)
     if not s: return _fail("Shift not found", 404)
     d = request.get_json(silent=True, force=True) or {}
 
-    if "company_id" in d:
+    if "company_id" in d or "companyId" in d:
+        raw_cid = d.get("company_id", d.get("companyId"))
         try:
-            cid = _as_int(d.get("company_id"), "company_id")
+            cid = _as_int(raw_cid, "companyId/company_id")
         except ValueError as ex:
             return _fail(str(ex), 422)
         if not Company.query.get(cid): return _fail("company_id not found", 404)
@@ -317,12 +383,25 @@ def _wor_row(w: WeeklyOffRule):
 @jwt_required()
 @requires_perms("attendance.weeklyoff.read")
 def list_weeklyoff():
+    """
+    GET /api/v1/attendance/masters/weekly-off
+      ?company_id=1 | companyId=1
+      &location_id=2 | locationId=2
+      &is_active=true|false
+      &page=1&size=20
+
+    This is the endpoint your UI is hitting:
+      {{base_url}}/api/v1/attendance/masters/weekly-off?companyId=4&page=1&limit=50
+    """
     q = WeeklyOffRule.query
     try:
-        cid = _as_int(request.args.get("company_id"), "company_id") if "company_id" in request.args else None
-        lid = _as_int(request.args.get("location_id"), "location_id") if "location_id" in request.args else None
+        cid_raw = _get_company_arg()
+        lid_raw = _get_location_arg()
+        cid = _as_int(cid_raw, "company_id") if cid_raw is not None else None
+        lid = _as_int(lid_raw, "location_id") if lid_raw is not None else None
     except ValueError as ex:
         return _fail(str(ex), 422)
+
     if cid: q = q.filter(WeeklyOffRule.company_id == cid)
     if lid: q = q.filter(WeeklyOffRule.location_id == lid)
 
@@ -330,8 +409,10 @@ def list_weeklyoff():
         is_active = _as_bool(request.args.get("is_active"), "is_active") if "is_active" in request.args else None
     except ValueError as ex:
         return _fail(str(ex), 422)
-    if is_active is True: q = q.filter(WeeklyOffRule.is_active.is_(True))
-    if is_active is False: q = q.filter(WeeklyOffRule.is_active.is_(False))
+    if is_active is True and hasattr(WeeklyOffRule, "is_active"):
+        q = q.filter(WeeklyOffRule.is_active.is_(True))
+    if is_active is False and hasattr(WeeklyOffRule, "is_active"):
+        q = q.filter(WeeklyOffRule.is_active.is_(False))
 
     allowed = {
         "id": WeeklyOffRule.id,
@@ -352,10 +433,25 @@ def list_weeklyoff():
 @jwt_required()
 @requires_perms("attendance.weeklyoff.create")
 def create_weeklyoff():
+    """
+    POST /api/v1/attendance/masters/weekly-off
+
+    Body:
+    {
+      "companyId": 4,             // or "company_id"
+      "locationId": 2,            // or "location_id", optional
+      "weekday": 6,               // 0=Mon..6=Sun
+      "is_alternate": true,
+      "week_numbers": "2,4",
+      "is_active": true
+    }
+    """
     d = request.get_json(silent=True, force=True) or {}
     try:
-        cid = _as_int(d.get("company_id"), "company_id")
-        lid = _as_int(d.get("location_id"), "location_id") if d.get("location_id") is not None else None
+        raw_cid = d.get("company_id", d.get("companyId"))
+        raw_lid = d.get("location_id", d.get("locationId"))
+        cid = _as_int(raw_cid, "company_id")
+        lid = _as_int(raw_lid, "location_id") if raw_lid is not None else None
     except ValueError as ex:
         return _fail(str(ex), 422)
     if not cid: return _fail("company_id is required", 422)
@@ -375,6 +471,18 @@ def create_weeklyoff():
         return _fail(str(ex), 422)
 
     week_numbers = (d.get("week_numbers") or "").strip() or None  # e.g., "1,3"
+
+    # optional duplicate-prevent (matches uq_weekoff_rule)
+    existing = WeeklyOffRule.query.filter(
+        WeeklyOffRule.company_id == cid,
+        WeeklyOffRule.location_id == lid,
+        WeeklyOffRule.weekday == weekday,
+        WeeklyOffRule.is_alternate == is_alt if hasattr(WeeklyOffRule, "is_alternate") else True,
+        WeeklyOffRule.week_numbers == week_numbers if hasattr(WeeklyOffRule, "week_numbers") else None,
+    ).first()
+    if existing:
+        return _fail("Weekly-off rule already exists for this scope", 409)
+
     w = WeeklyOffRule(company_id=cid, location_id=lid, weekday=weekday)
     if hasattr(WeeklyOffRule, "is_alternate"): w.is_alternate = is_alt
     if hasattr(WeeklyOffRule, "week_numbers"): w.week_numbers = week_numbers
@@ -387,21 +495,28 @@ def create_weeklyoff():
 @jwt_required()
 @requires_perms("attendance.weeklyoff.update")
 def update_weeklyoff(wid: int):
+    """
+    PUT /api/v1/attendance/masters/weekly-off/{id}
+
+    Body: same fields as create (all optional).
+    """
     w = WeeklyOffRule.query.get(wid)
     if not w: return _fail("Weekly-off rule not found", 404)
     d = request.get_json(silent=True, force=True) or {}
 
-    if "company_id" in d:
+    if "company_id" in d or "companyId" in d:
         try:
-            cid = _as_int(d.get("company_id"), "company_id")
+            raw_cid = d.get("company_id", d.get("companyId"))
+            cid = _as_int(raw_cid, "company_id")
         except ValueError as ex:
             return _fail(str(ex), 422)
         if not Company.query.get(cid): return _fail("company_id not found", 404)
         w.company_id = cid
 
-    if "location_id" in d:
+    if "location_id" in d or "locationId" in d:
         try:
-            lid = _as_int(d.get("location_id"), "location_id") if d.get("location_id") is not None else None
+            raw_lid = d.get("location_id", d.get("locationId"))
+            lid = _as_int(raw_lid, "location_id") if raw_lid is not None else None
         except ValueError as ex:
             return _fail(str(ex), 422)
         if lid and not Location.query.get(lid): return _fail("location_id not found", 404)
@@ -463,10 +578,21 @@ def _holiday_row(h: Holiday):
 @jwt_required()
 @requires_perms("attendance.holiday.read")
 def list_holidays():
+    """
+    GET /api/v1/attendance/masters/holidays
+      ?company_id=1 | companyId=1
+      &location_id=2 | locationId=2
+      &from=2025-01-01&to=2025-12-31
+      &q=Diwali
+      &is_active=true|false
+      &page=1&size=20
+    """
     q = Holiday.query
     try:
-        cid = _as_int(request.args.get("company_id"), "company_id") if "company_id" in request.args else None
-        lid = _as_int(request.args.get("location_id"), "location_id") if "location_id" in request.args else None
+        cid_raw = _get_company_arg()
+        lid_raw = _get_location_arg()
+        cid = _as_int(cid_raw, "company_id") if cid_raw is not None else None
+        lid = _as_int(lid_raw, "location_id") if lid_raw is not None else None
     except ValueError as ex:
         return _fail(str(ex), 422)
     if cid: q = q.filter(Holiday.company_id == cid)
@@ -476,8 +602,10 @@ def list_holidays():
         is_active = _as_bool(request.args.get("is_active"), "is_active") if "is_active" in request.args else None
     except ValueError as ex:
         return _fail(str(ex), 422)
-    if is_active is True: q = q.filter(Holiday.is_active.is_(True))
-    if is_active is False: q = q.filter(Holiday.is_active.is_(False))
+    if is_active is True and hasattr(Holiday, "is_active"):
+        q = q.filter(Holiday.is_active.is_(True))
+    if is_active is False and hasattr(Holiday, "is_active"):
+        q = q.filter(Holiday.is_active.is_(False))
 
     dfrom = request.args.get("from")
     dto   = request.args.get("to")
@@ -521,10 +649,24 @@ def get_holiday(hid: int):
 @jwt_required()
 @requires_perms("attendance.holiday.create")
 def create_holiday():
+    """
+    POST /api/v1/attendance/masters/holidays
+
+    Body:
+    {
+      "companyId": 1,           // or "company_id"
+      "locationId": 2,          // or "location_id", optional
+      "date": "2025-10-02",
+      "name": "Gandhi Jayanti",
+      "is_active": true
+    }
+    """
     d = request.get_json(silent=True, force=True) or {}
     try:
-        cid = _as_int(d.get("company_id"), "company_id")
-        lid = _as_int(d.get("location_id"), "location_id") if d.get("location_id") is not None else None
+        raw_cid = d.get("company_id", d.get("companyId"))
+        raw_lid = d.get("location_id", d.get("locationId"))
+        cid = _as_int(raw_cid, "company_id")
+        lid = _as_int(raw_lid, "location_id") if raw_lid is not None else None
         the_date = _parse_date(d.get("date"), "date")
     except ValueError as ex:
         return _fail(str(ex), 422)
@@ -538,7 +680,7 @@ def create_holiday():
     dup = Holiday.query.filter(
         Holiday.company_id == cid,
         Holiday.date == the_date,
-        (Holiday.location_id == lid) if lid else Holiday.location_id.is_(None)
+        (Holiday.location_id == lid) if lid is not None else Holiday.location_id.is_(None)
     ).first()
     if dup: return _fail("Holiday already exists for this scope/date", 409)
 
@@ -551,21 +693,28 @@ def create_holiday():
 @jwt_required()
 @requires_perms("attendance.holiday.update")
 def update_holiday(hid: int):
+    """
+    PUT /api/v1/attendance/masters/holidays/{id}
+
+    Body: same as create (all optional).
+    """
     h = Holiday.query.get(hid)
     if not h: return _fail("Holiday not found", 404)
     d = request.get_json(silent=True, force=True) or {}
 
-    if "company_id" in d:
+    if "company_id" in d or "companyId" in d:
         try:
-            cid = _as_int(d.get("company_id"), "company_id")
+            raw_cid = d.get("company_id", d.get("companyId"))
+            cid = _as_int(raw_cid, "company_id")
         except ValueError as ex:
             return _fail(str(ex), 422)
         if not Company.query.get(cid): return _fail("company_id not found", 404)
         h.company_id = cid
 
-    if "location_id" in d:
+    if "location_id" in d or "locationId" in d:
         try:
-            lid = _as_int(d.get("location_id"), "location_id") if d.get("location_id") is not None else None
+            raw_lid = d.get("location_id", d.get("locationId"))
+            lid = _as_int(raw_lid, "location_id") if raw_lid is not None else None
         except ValueError as ex:
             return _fail(str(ex), 422)
         if lid and not Location.query.get(lid): return _fail("location_id not found", 404)

@@ -3,28 +3,22 @@ import click
 from flask import Flask
 from flask_cors import CORS
 
-from hrms_api.extensions import db
+from hrms_api.extensions import db, migrate, init_db
 from hrms_api.common.errors import register_error_handlers
 from hrms_api.models import load_all
-
 
 from datetime import timedelta, datetime
 from flask_jwt_extended import JWTManager
 
-
-
-from flask_migrate import Migrate
-migrate = Migrate()
-
-import click
 from flask.cli import with_appcontext
 
 jwt = JWTManager()
 
-def create_app():
+
+def create_app(config_object: str | None = None):
     app = Flask(__name__)
 
-    # Config
+    # Basic inline config (defaults)
     app.config["JWT_SECRET_KEY"] = os.getenv("JWT_SECRET_KEY", "dev-jwt-secret")
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=2)
     app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=7)
@@ -35,6 +29,14 @@ def create_app():
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
 
+    # 🔑 Try loading external config, but don't crash if missing
+    if config_object:
+        try:
+            app.config.from_object(config_object)
+        except Exception as e:
+            # Just log and continue with defaults
+            app.logger.warning("Could not import config object %r: %s", config_object, e)
+
     # CORS (dev)
     CORS(app, resources={r"/api/*": {"origins": "*"}})
 
@@ -42,13 +44,13 @@ def create_app():
     db.init_app(app)
     register_error_handlers(app)
     jwt.init_app(app)
+    migrate.init_app(app, db)
 
     # Ensure models are loaded so metadata is complete
     with app.app_context():
         load_all()
 
-    migrate.init_app(app, db)
-
+    # Try to expose flask db commands
     try:
         from flask_migrate.cli import db as migrate_db_group
         app.cli.add_command(migrate_db_group)
@@ -85,7 +87,8 @@ def create_app():
     from .rbac import bp as rbac_bp
     from hrms_api.common.errors import bp_errors
     from hrms_api.blueprints import security_admin
-    #Payroll And Compliences 
+
+    # Payroll & Compliance
     from hrms_api.blueprints.trades import bp as trades_bp
     from hrms_api.blueprints.pay_cycles import bp as pay_cycles_bp
     from hrms_api.blueprints.pay_policies import bp as pay_policies_bp
@@ -129,8 +132,7 @@ def create_app():
     app.register_blueprint(attendance_rollup_bp)
     app.register_blueprint(pay_adjustments_bp)
 
-
-    # in hrms_api/__init__.py (inside create_app, after app.register_blueprint(rbac_bp))
+    # Warm auth / RBAC settings
     with app.app_context():
         try:
             from hrms_api.rbac import _ensure_auth_settings, _apply_settings_to_app
@@ -139,9 +141,8 @@ def create_app():
         except Exception as e:
             app.logger.warning("Could not warm auth settings: %s", e)
 
+    # ----------------- CLI COMMANDS -----------------
 
-
-    # ---- CLI (registered on this app instance) ----
     @app.cli.command("seed-core")
     def seed_core():
         """Seed demo company and core users (admin, HR, employee)."""
@@ -150,7 +151,7 @@ def create_app():
         from hrms_api.models.security import Role, UserRole
         from hrms_api.models.employee import Employee
 
-        def ensure_role(code: str) -> Role:
+        def ensure_role(code: str) -> "Role":
             role = Role.query.filter_by(code=code).first()
             if not role:
                 role = Role(code=code)
@@ -238,14 +239,17 @@ def create_app():
         from hrms_api.models.master import Company, Department, Designation, Grade, CostCenter
         c = Company.query.filter_by(code="DEMO").first()
         if not c:
-            click.echo("Run flask seed-core first."); return
+            click.echo("Run flask seed-core first.")
+            return
         # Departments
         d_eng = c.departments.filter_by(name="Engineering").first()
         if not d_eng:
-            d_eng = Department(company_id=c.id, name="Engineering"); db.session.add(d_eng)
+            d_eng = Department(company_id=c.id, name="Engineering")
+            db.session.add(d_eng)
         d_hr = c.departments.filter_by(name="HR").first()
         if not d_hr:
-            d_hr = Department(company_id=c.id, name="HR"); db.session.add(d_hr)
+            d_hr = Department(company_id=c.id, name="HR")
+            db.session.add(d_hr)
         db.session.commit()
         # Designations
         if not d_eng.designations.filter_by(name="Software Engineer").first():
@@ -253,11 +257,15 @@ def create_app():
         if not d_hr.designations.filter_by(name="HR Executive").first():
             db.session.add(Designation(department_id=d_hr.id, name="HR Executive"))
         # Grades
-        for g in ("G1","G2","G3"):
+        for g in ("G1", "G2", "G3"):
             if not Grade.query.filter_by(name=g).first():
                 db.session.add(Grade(name=g))
         # Cost centers
-        for code, name in (("CC-001","Corporate"),("CC-ENG","Engineering"),("CC-HR","Human Resources")):
+        for code, name in (
+            ("CC-001", "Corporate"),
+            ("CC-ENG", "Engineering"),
+            ("CC-HR", "Human Resources"),
+        ):
             if not CostCenter.query.filter_by(code=code).first():
                 db.session.add(CostCenter(code=code, name=name))
         db.session.commit()
@@ -270,13 +278,17 @@ def create_app():
         from hrms_api.models.user import User
         admin = Role.query.filter_by(code="admin").first()
         if not admin:
-            admin = Role(code="admin"); db.session.add(admin); db.session.commit()
+            admin = Role(code="admin")
+            db.session.add(admin)
+            db.session.commit()
         u = User.query.filter_by(email="admin@demo.local").first()
         if not u:
-            click.echo("User admin@demo.local not found. Run flask seed-core first."); return
+            click.echo("User admin@demo.local not found. Run flask seed-core first.")
+            return
         link = UserRole.query.filter_by(user_id=u.id, role_id=admin.id).first()
         if not link:
-            db.session.add(UserRole(user_id=u.id, role_id=admin.id)); db.session.commit()
+            db.session.add(UserRole(user_id=u.id, role_id=admin.id))
+            db.session.commit()
         click.echo("Seeded role 'admin' and linked to admin@demo.local")
 
     # ---------------- Compliance CLI ----------------
@@ -289,10 +301,7 @@ def create_app():
     @click.option("--state", "state_opt", required=True, help="State code e.g. MH")
     @click.option("--company-id", "company_id_opt", type=int, required=True, help="Company ID")
     def compliance_seed_defaults(state_opt: str, company_id_opt: int):
-        """Insert default PF/ESI/PT StatConfig records with effective_from = first of current FY.
-
-        This seeds the new versioned config rows (type/scope/priority). It does not modify legacy key-based rows.
-        """
+        """Insert default PF/ESI/PT StatConfig records with effective_from = first of current FY."""
         from datetime import date
         from hrms_api.models.master import Company
         from hrms_api.models.payroll.stat_config import StatConfig
@@ -305,7 +314,9 @@ def create_app():
         # Quick company existence check (non-fatal)
         comp = Company.query.get(company_id_opt)
         if not comp:
-            click.echo(f"Warning: company_id={company_id_opt} not found. Proceeding to insert configs anyway.")
+            click.echo(
+                f"Warning: company_id={company_id_opt} not found. Proceeding to insert configs anyway."
+            )
 
         # PF default
         pf_json = {
@@ -316,15 +327,17 @@ def create_app():
             "base_tag": "BASIC_DA",
             "voluntary_max": 0.12,
         }
-        db.session.add(StatConfig(
-            type="PF",
-            scope_company_id=company_id_opt,
-            scope_state=state_opt.upper(),
-            priority=100,
-            effective_from=eff_from,
-            value_json=pf_json,
-            key="STATCFG_V2_PF",
-        ))
+        db.session.add(
+            StatConfig(
+                type="PF",
+                scope_company_id=company_id_opt,
+                scope_state=state_opt.upper(),
+                priority=100,
+                effective_from=eff_from,
+                value_json=pf_json,
+                key="STATCFG_V2_PF",
+            )
+        )
 
         # ESI default
         esi_json = {
@@ -333,17 +346,19 @@ def create_app():
             "threshold": 21000,
             "entry_rule": "period_locking",
         }
-        db.session.add(StatConfig(
-            type="ESI",
-            scope_company_id=company_id_opt,
-            scope_state=state_opt.upper(),
-            priority=100,
-            effective_from=eff_from,
-            value_json=esi_json,
-            key="STATCFG_V2_ESI",
-        ))
+        db.session.add(
+            StatConfig(
+                type="ESI",
+                scope_company_id=company_id_opt,
+                scope_state=state_opt.upper(),
+                priority=100,
+                effective_from=eff_from,
+                value_json=esi_json,
+                key="STATCFG_V2_ESI",
+            )
+        )
 
-        # PT (MH defaults only)
+        # PT default
         pt_json = {
             "state": state_opt.upper(),
             "slabs": [
@@ -353,292 +368,24 @@ def create_app():
             ],
             "double_month": None,
         }
-        db.session.add(StatConfig(
-            type="PT",
-            scope_company_id=company_id_opt,
-            scope_state=state_opt.upper(),
-            priority=100,
-            effective_from=eff_from,
-            value_json=pt_json,
-            key="STATCFG_V2_PT",
-        ))
+        db.session.add(
+            StatConfig(
+                type="PT",
+                scope_company_id=company_id_opt,
+                scope_state=state_opt.upper(),
+                priority=100,
+                effective_from=eff_from,
+                value_json=pt_json,
+                key="STATCFG_V2_PT",
+            )
+        )
 
         db.session.commit()
-        click.echo(f"Seeded: PF, ESI, PT for company_id={company_id_opt}, state={state_opt.upper()} from {eff_from.isoformat()}")
+        click.echo(
+            f"Seeded: PF, ESI, PT for company_id={company_id_opt}, state={state_opt.upper()} from {eff_from.isoformat()}"
+        )
 
-        @app.cli.command("seed-employees-10")
-        def seed_employees_10():
-            """
-            Create/ensure employees with IDs 1..10 under DEMO company so CSVs using employee_id 1..10 work.
-            Safe to run multiple times. If the employees table is empty or has <10, this will upsert IDs 1..10.
-            """
-            from sqlalchemy import text
-            from hrms_api.models.master import Company, Location, Department, Designation, Grade, CostCenter
-            from hrms_api.models.employee import Employee
-
-            c = Company.query.filter_by(code="DEMO").first()
-            if not c:
-                click.echo("Company DEMO missing. Run: flask seed-core")
-                return
-
-            # Ensure baseline masters exist
-            loc = Location.query.filter_by(company_id=c.id, name="Pune").first()
-            if not loc:
-                loc = Location(company_id=c.id, name="Pune"); db.session.add(loc); db.session.commit()
-            dept = Department.query.filter_by(company_id=c.id, name="Engineering").first()
-            if not dept:
-                dept = Department(company_id=c.id, name="Engineering"); db.session.add(dept); db.session.commit()
-            des = Designation.query.filter_by(department_id=dept.id, name="Software Engineer").first()
-            if not des:
-                des = Designation(department_id=dept.id, name="Software Engineer"); db.session.add(des); db.session.commit()
-            grd = Grade.query.filter_by(name="G1").first()
-            if not grd:
-                grd = Grade(name="G1"); db.session.add(grd); db.session.commit()
-            cc = CostCenter.query.filter_by(code="CC-ENG").first()
-            if not cc:
-                cc = CostCenter(code="CC-ENG", name="Engineering"); db.session.add(cc); db.session.commit()
-
-            created = 0
-            updated = 0
-            for i in range(1, 11):
-                email = f"emp{i}@demo.local"
-                code = f"E-{i:04d}"
-
-                emp = Employee.query.get(i)  # we try to pin specific IDs 1..10
-                if not emp:
-                    # Create with explicit ID so your CSV employee_id lines up
-                    emp = Employee(
-                        id=i,
-                        company_id=c.id,
-                        location_id=loc.id,
-                        department_id=dept.id,
-                        designation_id=des.id,
-                        grade_id=grd.id,
-                        cost_center_id=cc.id,
-                        code=code,
-                        email=email,
-                        first_name=f"Emp{i}",
-                        last_name="Demo",
-                        doj=datetime.utcnow().date(),
-                        employment_type="fulltime",
-                        status="active",
-                    )
-                    db.session.add(emp)
-                    created += 1
-                else:
-                    # Keep existing but ensure a few useful fields are filled
-                    changed = False
-                    if not getattr(emp, "email", None):
-                        emp.email = email; changed = True
-                    if not getattr(emp, "code", None):
-                        emp.code = code; changed = True
-                    if not getattr(emp, "status", None):
-                        emp.status = "active"; changed = True
-                    if changed: updated += 1
-
-            db.session.commit()
-
-            # Reset the sequence for Postgres if we manually set IDs
-            try:
-                db.session.execute(text(
-                    "SELECT setval(pg_get_serial_sequence('employees','id'), (SELECT MAX(id) FROM employees))"
-                ))
-                db.session.commit()
-            except Exception:
-                # Not Postgres or no serial sequence — ignore
-                pass
-
-            click.echo(f"Employees ensured: created={created}, updated={updated}. IDs 1..10 are present.")
-
-        @app.cli.command("seed-users-10")
-        def seed_users_10():
-            """
-            Create/ensure user accounts emp1..emp10 (password=4445) for quick logins.
-            """
-            from hrms_api.models.user import User
-
-            created = 0
-            updated = 0
-            for i in range(1, 11):
-                email = f"emp{i}@demo.local"
-                full_name = f"Employee {i}"
-                u = User.query.filter_by(email=email).first()
-                if not u:
-                    u = User(email=email, full_name=full_name, status="active")
-                    u.set_password("4445")
-                    db.session.add(u)
-                    created += 1
-                else:
-                    # keep status active and name current
-                    changed = False
-                    if getattr(u, "full_name", "") != full_name:
-                        u.full_name = full_name; changed = True
-                    if getattr(u, "status", "active") != "active":
-                        u.status = "active"; changed = True
-                    if changed: updated += 1
-
-            db.session.commit()
-            click.echo(f"Users ensured (emp1..emp10), password=4445 — created={created}, updated={updated}")
-
-        @app.cli.command("seed-demo-all")
-        def seed_demo_all():
-            """
-            Convenience: run the full DEMO seed suite in order.
-            """
-            # Reuse the functions above
-            ctx = app.test_request_context(); ctx.push()
-            try:
-                # Core + masters + roles
-                app.invoke(app.cli.commands["seed-core"])
-                app.invoke(app.cli.commands["seed-masters"])
-                app.invoke(app.cli.commands["seed-more-masters"])
-                app.invoke(app.cli.commands["seed-auth"])
-                # Employees + Users
-                app.invoke(app.cli.commands["seed-employees-10"])
-                app.invoke(app.cli.commands["seed-users-10"])
-            finally:
-                ctx.pop()
-            click.echo("All demo seeds done: core, masters, auth, employees(1..10), users(emp1..emp10).")
-
-
-        @app.cli.command("seed-employees-range")
-        @click.option("--start", default=1, show_default=True, type=int, help="Start employee id")
-        @click.option("--end", default=10, show_default=True, type=int, help="End employee id (inclusive)")
-        def seed_employees_range(start: int, end: int):
-            """
-            Ensure employees with IDs in [start..end] exist under DEMO company.
-            Populates basics so importer & reports work. Safe to run multiple times.
-            """
-            from sqlalchemy import text
-            from hrms_api.models.master import Company, Location, Department, Designation, Grade, CostCenter
-            from hrms_api.models.employee import Employee
-
-            if start > end:
-                click.echo("start must be <= end"); return
-
-            c = Company.query.filter_by(code="DEMO").first()
-            if not c:
-                click.echo("Company DEMO missing. Run: flask seed-core"); return
-
-            # Ensure baseline masters exist
-            loc = Location.query.filter_by(company_id=c.id, name="Pune").first()
-            if not loc:
-                loc = Location(company_id=c.id, name="Pune"); db.session.add(loc); db.session.commit()
-            dept = Department.query.filter_by(company_id=c.id, name="Engineering").first()
-            if not dept:
-                dept = Department(company_id=c.id, name="Engineering"); db.session.add(dept); db.session.commit()
-            des = Designation.query.filter_by(department_id=dept.id, name="Software Engineer").first()
-            if not des:
-                des = Designation(department_id=dept.id, name="Software Engineer"); db.session.add(des); db.session.commit()
-            grd = Grade.query.filter_by(name="G1").first()
-            if not grd:
-                grd = Grade(name="G1"); db.session.add(grd); db.session.commit()
-            cc = CostCenter.query.filter_by(code="CC-ENG").first()
-            if not cc:
-                cc = CostCenter(code="CC-ENG", name="Engineering"); db.session.add(cc); db.session.commit()
-
-            created = 0
-            updated = 0
-            for i in range(start, end + 1):
-                email = f"emp{i}@demo.local"
-                code = f"E-{i:04d}"
-
-                emp = Employee.query.get(i)  # pin specific IDs
-                if not emp:
-                    emp = Employee(
-                        id=i,
-                        company_id=c.id,
-                        location_id=loc.id,
-                        department_id=dept.id,
-                        designation_id=des.id,
-                        grade_id=grd.id,
-                        cost_center_id=cc.id,
-                        code=code,
-                        email=email,
-                        first_name=f"Emp{i}",
-                        last_name="Demo",
-                        doj=datetime.utcnow().date(),
-                        employment_type="fulltime",
-                        status="active",
-                    )
-                    db.session.add(emp)
-                    created += 1
-                else:
-                    # Make sure key fields exist
-                    changed = False
-                    if not getattr(emp, "email", None): emp.email = email; changed = True
-                    if not getattr(emp, "code",  None): emp.code  = code;  changed = True
-                    if getattr(emp, "status", None) != "active": emp.status = "active"; changed = True
-                    if changed: updated += 1
-
-            db.session.commit()
-
-            # Reset the sequence (Postgres) because we manually set IDs
-            try:
-                db.session.execute(text(
-                    "SELECT setval(pg_get_serial_sequence('employees','id'), (SELECT MAX(id) FROM employees))"
-                ))
-                db.session.commit()
-            except Exception:
-                pass
-
-            click.echo(f"Employees ensured in [{start}..{end}] → created={created}, updated={updated}")
-
-        @app.cli.command("seed-users-range")
-        @click.option("--start", default=1, show_default=True, type=int)
-        @click.option("--end", default=10, show_default=True, type=int)
-        @click.option("--password", default="4445", show_default=True, type=str)
-        def seed_users_range(start: int, end: int, password: str):
-            """
-            Ensure users emp{start}..emp{end} exist with password (default 4445).
-            """
-            from hrms_api.models.user import User
-
-            if start > end:
-                click.echo("start must be <= end"); return
-
-            created = 0
-            updated = 0
-            for i in range(start, end + 1):
-                email = f"emp{i}@demo.local"
-                full_name = f"Employee {i}"
-                u = User.query.filter_by(email=email).first()
-                if not u:
-                    u = User(email=email, full_name=full_name, status="active")
-                    u.set_password(password)
-                    db.session.add(u)
-                    created += 1
-                else:
-                    changed = False
-                    if getattr(u, "full_name", "") != full_name:
-                        u.full_name = full_name; changed = True
-                    if getattr(u, "status", "active") != "active":
-                        u.status = "active"; changed = True
-                    if changed: updated += 1
-
-            db.session.commit()
-            click.echo(f"Users ensured emp{start}..emp{end} (password={password}) → created={created}, updated={updated}")
-
-        @app.cli.command("seed-demo-range")
-        @click.option("--start", default=1, show_default=True, type=int)
-        @click.option("--end", default=10, show_default=True, type=int)
-        @click.option("--password", default="4445", show_default=True, type=str)
-        def seed_demo_range(start: int, end: int, password: str):
-            """
-            Convenience wrapper: creates employees [start..end] under DEMO and users emp{start}..emp{end}.
-            """
-            # call the commands directly
-            ctx = app.test_request_context(); ctx.push()
-            try:
-                app.invoke(app.cli.commands["seed-employees-range"], start=start, end=end)
-                app.invoke(app.cli.commands["seed-users-range"], start=start, end=end, password=password)
-            finally:
-                ctx.pop()
-            click.echo(f"Done: employees [{start}..{end}] and users emp{start}..emp{end} (password={password})")
-
-        # ---------------- DEMO BULK SEEDERS ----------------
-
-        # ---------------- DEMO BULK SEEDERS (fixed: no app.invoke) ----------------
+    # ------------- Helper functions for demo seeders -------------
 
     def _ensure_demo_masters():
         from hrms_api.models.master import Company, Location, Department, Designation, Grade, CostCenter
@@ -646,32 +393,44 @@ def create_app():
         c = Company.query.filter_by(code="DEMO").first()
         if not c:
             c = Company(code="DEMO", name="Demo Co")
-            db.session.add(c); db.session.commit()
+            db.session.add(c)
+            db.session.commit()
         # Location
         loc = Location.query.filter_by(company_id=c.id, name="Pune").first()
         if not loc:
-            loc = Location(company_id=c.id, name="Pune"); db.session.add(loc); db.session.commit()
+            loc = Location(company_id=c.id, name="Pune")
+            db.session.add(loc)
+            db.session.commit()
         # Department
         dept = Department.query.filter_by(company_id=c.id, name="Engineering").first()
         if not dept:
-            dept = Department(company_id=c.id, name="Engineering"); db.session.add(dept); db.session.commit()
+            dept = Department(company_id=c.id, name="Engineering")
+            db.session.add(dept)
+            db.session.commit()
         # Designation
         des = Designation.query.filter_by(department_id=dept.id, name="Software Engineer").first()
         if not des:
-            des = Designation(department_id=dept.id, name="Software Engineer"); db.session.add(des); db.session.commit()
+            des = Designation(department_id=dept.id, name="Software Engineer")
+            db.session.add(des)
+            db.session.commit()
         # Grade
         grd = Grade.query.filter_by(name="G1").first()
         if not grd:
-            grd = Grade(name="G1"); db.session.add(grd); db.session.commit()
+            grd = Grade(name="G1")
+            db.session.add(grd)
+            db.session.commit()
         # Cost center
         cc = CostCenter.query.filter_by(code="CC-ENG").first()
         if not cc:
-            cc = CostCenter(code="CC-ENG", name="Engineering"); db.session.add(cc); db.session.commit()
+            cc = CostCenter(code="CC-ENG", name="Engineering")
+            db.session.add(cc)
+            db.session.commit()
         return c, loc, dept, des, grd, cc
 
     def _seed_employees_range_impl(start: int, end: int):
         from sqlalchemy import text
         from hrms_api.models.employee import Employee
+
         if start > end:
             raise ValueError("start must be <= end")
 
@@ -680,33 +439,49 @@ def create_app():
         created = updated = 0
         for i in range(start, end + 1):
             email = f"emp{i}@demo.local"
-            code  = f"E-{i:04d}"
+            code = f"E-{i:04d}"
             emp = Employee.query.get(i)  # pin exact IDs
             if not emp:
                 emp = Employee(
                     id=i,
-                    company_id=c.id, location_id=loc.id,
-                    department_id=dept.id, designation_id=des.id,
-                    grade_id=grd.id, cost_center_id=cc.id,
-                    code=code, email=email,
-                    first_name=f"Emp{i}", last_name="Demo",
+                    company_id=c.id,
+                    location_id=loc.id,
+                    department_id=dept.id,
+                    designation_id=des.id,
+                    grade_id=grd.id,
+                    cost_center_id=cc.id,
+                    code=code,
+                    email=email,
+                    first_name=f"Emp{i}",
+                    last_name="Demo",
                     doj=datetime.utcnow().date(),
-                    employment_type="fulltime", status="active",
+                    employment_type="fulltime",
+                    status="active",
                 )
-                db.session.add(emp); created += 1
+                db.session.add(emp)
+                created += 1
             else:
                 changed = False
-                if not getattr(emp, "email", None): emp.email = email; changed = True
-                if not getattr(emp, "code",  None): emp.code  = code;  changed = True
-                if getattr(emp, "status", None) != "active": emp.status = "active"; changed = True
-                if changed: updated += 1
+                if not getattr(emp, "email", None):
+                    emp.email = email
+                    changed = True
+                if not getattr(emp, "code", None):
+                    emp.code = code
+                    changed = True
+                if getattr(emp, "status", None) != "active":
+                    emp.status = "active"
+                    changed = True
+                if changed:
+                    updated += 1
         db.session.commit()
 
         # reset PG sequence if IDs were set manually
         try:
-            db.session.execute(text(
-                "SELECT setval(pg_get_serial_sequence('employees','id'), (SELECT MAX(id) FROM employees))"
-            ))
+            db.session.execute(
+                text(
+                    "SELECT setval(pg_get_serial_sequence('employees','id'), (SELECT MAX(id) FROM employees))"
+                )
+            )
             db.session.commit()
         except Exception:
             pass
@@ -715,6 +490,7 @@ def create_app():
 
     def _seed_users_range_impl(start: int, end: int, password: str = "4445"):
         from hrms_api.models.user import User
+
         if start > end:
             raise ValueError("start must be <= end")
 
@@ -726,14 +502,18 @@ def create_app():
             if not u:
                 u = User(email=email, full_name=full_name, status="active")
                 u.set_password(password)
-                db.session.add(u); created += 1
+                db.session.add(u)
+                created += 1
             else:
                 changed = False
                 if getattr(u, "full_name", "") != full_name:
-                    u.full_name = full_name; changed = True
+                    u.full_name = full_name
+                    changed = True
                 if getattr(u, "status", "active") != "active":
-                    u.status = "active"; changed = True
-                if changed: updated += 1
+                    u.status = "active"
+                    changed = True
+                if changed:
+                    updated += 1
         db.session.commit()
         return created, updated
 
@@ -756,7 +536,9 @@ def create_app():
         """Ensure users emp{start}..emp{end} exist with given password."""
         try:
             created, updated = _seed_users_range_impl(start, end, password)
-            click.echo(f"Users ensured emp{start}..emp{end} (password={password}) → created={created}, updated={updated}")
+            click.echo(
+                f"Users ensured emp{start}..emp{end} (password={password}) → created={created}, updated={updated}"
+            )
         except ValueError as e:
             click.echo(str(e))
 
@@ -770,7 +552,7 @@ def create_app():
             e_created, e_updated = _seed_employees_range_impl(start, end)
             u_created, u_updated = _seed_users_range_impl(start, end, password)
             click.echo(
-                f"Done: employees [{start}..{end}] (created={e_created}, updated={e_updated}) "
+                f"Done: employees [{start}..end] (created={e_created}, updated={e_updated}) "
                 f"and users emp{start}..emp{end} (created={u_created}, updated={u_updated}, password={password})"
             )
         except ValueError as e:
@@ -785,7 +567,8 @@ def create_app():
     @app.cli.command("seed-users-10")
     def seed_users_10():
         created, updated = _seed_users_range_impl(1, 10, "4445")
-        click.echo(f"Users ensured emp1..emp10 (password=4445) → created={created}, updated={updated}")
+        click.echo("Users ensured emp1..emp10 (password=4445) → "
+                   f"created={created}, updated={updated}")
 
     @app.cli.command("seed-demo-all")
     def seed_demo_all():
@@ -796,27 +579,33 @@ def create_app():
             f"users emp1..emp10 (created={u_created}, updated={u_updated}, password=4445)"
         )
 
-
     @app.cli.command("seed-leave-types")
     def seed_leave_types():
         from hrms_api.models.master import Company
         from hrms_api.models.leave import LeaveType
         c = Company.query.filter_by(code="DEMO").first()
         if not c:
-            click.echo("Run seed-core first"); return
+            click.echo("Run seed-core first")
+            return
         defs = [
-            ("CL","Casual Leave",1.0, True,  False),
-            ("SL","Sick Leave",  0.5, True,  False),
-            ("PL","Privilege",   1.5, True,  True),
+            ("CL", "Casual Leave", 1.0, True, False),
+            ("SL", "Sick Leave", 0.5, True, False),
+            ("PL", "Privilege", 1.5, True, True),
         ]
         created = 0
-        for code,name,accrual,paid,carry in defs:
+        for code, name, accrual, paid, carry in defs:
             t = LeaveType.query.filter_by(company_id=c.id, code=code).first()
             if not t:
-                t = LeaveType(company_id=c.id, code=code, name=name,
-                              accrual_per_month=accrual, paid=paid,
-                              carry_forward_limit=30 if carry else None)
-                db.session.add(t); created += 1
+                t = LeaveType(
+                    company_id=c.id,
+                    code=code,
+                    name=name,
+                    accrual_per_month=accrual,
+                    paid=paid,
+                    carry_forward_limit=30 if carry else None,
+                )
+                db.session.add(t)
+                created += 1
         db.session.commit()
         click.echo(f"Leave types ensured: created={created}")
 
@@ -825,23 +614,31 @@ def create_app():
         from hrms_api.models.leave import LeaveType, LeaveBalance
         from hrms_api.models.employee import Employee
 
-        emp_ids = [e.id for e in Employee.query.filter(Employee.id.between(1,10)).all()]
+        emp_ids = [e.id for e in Employee.query.filter(Employee.id.between(1, 10)).all()]
         types = LeaveType.query.all()
         if not emp_ids or not types:
-            click.echo("Need employees 1..10 and leave types. Run seed-demo-all and seed-leave-types."); return
+            click.echo("Need employees 1..10 and leave types. Run seed-demo-all and seed-leave-types.")
+            return
         created = 0
         for eid in emp_ids:
             for t in types:
                 b = LeaveBalance.query.filter_by(employee_id=eid, leave_type_id=t.id).first()
                 if not b:
                     # starter packs
-                    start_bal = 12.0 if t.code=="CL" else 7.0 if t.code=="SL" else 15.0
-                    b = LeaveBalance(employee_id=eid, leave_type_id=t.id, balance=start_bal, ytd_accrued=start_bal, ytd_taken=0)
-                    db.session.add(b); created += 1
+                    start_bal = 12.0 if t.code == "CL" else 7.0 if t.code == "SL" else 15.0
+                    b = LeaveBalance(
+                        employee_id=eid,
+                        leave_type_id=t.id,
+                        balance=start_bal,
+                        ytd_accrued=start_bal,
+                        ytd_taken=0,
+                    )
+                    db.session.add(b)
+                    created += 1
         db.session.commit()
-        click.echo(f"Leave balances ensured for emp1..10 across {len(types)} types: created={created}")
-
-
+        click.echo(
+            f"Leave balances ensured for emp1..10 across {len(types)} types: created={created}"
+        )
 
     @app.cli.command("seed-rbac")
     @with_appcontext
@@ -849,37 +646,38 @@ def create_app():
         from hrms_api.seed_rbac import run
         click.echo(run())
 
-
-
     @app.cli.command("grant-admin")
     @click.argument("email")
     def grant_admin(email):
         """Attach 'admin' role to a user by email."""
-        from hrms_api.extensions import db
         from hrms_api.models.user import User
         from hrms_api.models.security import Role, UserRole
 
         u = User.query.filter_by(email=email).first()
         if not u:
-            click.echo(f"User {email} not found"); return
+            click.echo(f"User {email} not found")
+            return
         admin = Role.query.filter_by(code="admin").first()
         if not admin:
-            admin = Role(code="admin"); db.session.add(admin); db.session.commit()
+            admin = Role(code="admin")
+            db.session.add(admin)
+            db.session.commit()
         has = any(ur.role_id == admin.id for ur in u.user_roles)
         if not has:
-            db.session.add(UserRole(user_id=u.id, role_id=admin.id)); db.session.commit()
+            db.session.add(UserRole(user_id=u.id, role_id=admin.id))
+            db.session.commit()
         click.echo(f"Granted 'admin' to {email}")
 
     @app.cli.command("rbac-grant-all")
     @click.argument("role_code")
     def rbac_grant_all(role_code):
         """Grant ALL existing permissions to a role (e.g., 'hr' or 'admin')."""
-        from hrms_api.extensions import db
         from hrms_api.models.security import Role, Permission, RolePermission
 
         role = Role.query.filter_by(code=role_code).first()
         if not role:
-            click.echo(f"Role {role_code} not found"); return
+            click.echo(f"Role {role_code} not found")
+            return
         perm_ids = [p.id for p in Permission.query.all()]
         existing = {(rp.role_id, rp.permission_id) for rp in role.permissions}
         new_links = 0
@@ -890,7 +688,5 @@ def create_app():
                 new_links += 1
         db.session.commit()
         click.echo(f"Granted {new_links} permissions to role '{role_code}'")
-
-
 
     return app
