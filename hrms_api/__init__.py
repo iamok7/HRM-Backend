@@ -97,6 +97,7 @@ def create_app(config_object: str | None = None):
     from hrms_api.blueprints.pay_compliance import bp as pay_compliance_bp
     from hrms_api.blueprints.attendance_rollup import bp as attendance_rollup_bp
     from hrms_api.blueprints.pay_adjustments import bp as pay_adjustments_bp
+    from hrms_api.blueprints.attendance_face import bp as attendance_face_bp
 
     app.register_blueprint(health_bp)
     app.register_blueprint(auth_bp)
@@ -117,6 +118,7 @@ def create_app(config_object: str | None = None):
     app.register_blueprint(attendance_monthly_bp)
     app.register_blueprint(attendance_self_punch_bp)
     app.register_blueprint(attendance_punch_import_bp)
+    app.register_blueprint(attendance_face_bp)
     app.register_blueprint(leave_bp)
     app.register_blueprint(attendance_missed_bp)
     app.register_blueprint(security_bp)

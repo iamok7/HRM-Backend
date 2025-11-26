@@ -62,6 +62,9 @@ class AttendancePunch(db.Model):
     # geo (mainly for selfie; optional for machine if integrator provides)
     lat: Mapped[Optional[float]] = mapped_column(db.Numeric(9, 6), nullable=True)
     lon: Mapped[Optional[float]] = mapped_column(db.Numeric(9, 6), nullable=True)
+    location_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("locations.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     accuracy_m: Mapped[Optional[float]] = mapped_column(db.Numeric(6, 2), nullable=True)
 
     # selfie evidence
