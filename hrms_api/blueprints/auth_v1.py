@@ -13,7 +13,9 @@ def _user_payload(u: User):
 
 @bp.post("/login")
 def login():
-    data = request.get_json(silent=True, force=True) or {}
+    data = request.get_json(silent=True, force=True)
+    if not isinstance(data, dict):
+        data = {}
     email = (data.get("email") or "").strip().lower()
     password = data.get("password") or ""
     u = User.query.filter_by(email=email).first()
@@ -23,7 +25,9 @@ def login():
     roles = u.role_codes()
     add_claims = {"roles": roles, "email": u.email, "name": u.full_name}
 
-    access  = create_access_token(identity=str(u.id), additional_claims=add_claims)
+    from datetime import timedelta
+    expires = timedelta(days=1)
+    access  = create_access_token(identity=str(u.id), additional_claims=add_claims, expires_delta=expires)
     refresh = create_refresh_token(identity=str(u.id), additional_claims={"roles": roles})
     return jsonify({"success": True, "access": access, "refresh": refresh, "user": _user_payload(u)}), 200
 

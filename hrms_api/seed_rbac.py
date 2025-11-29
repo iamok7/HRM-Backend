@@ -30,6 +30,8 @@ DEFAULT_PERMS = [
     # Leave
     "leave.types.read","leave.types.manage","leave.balance.read","leave.balance.adjust",
     "leave.request.create","leave.request.approve",
+    # Leave Policies
+    "leave.policies.view", "leave.policies.manage", "leave.policies.sync_balances",
 
     # Reports (RGS)
     "rgs.report.view",

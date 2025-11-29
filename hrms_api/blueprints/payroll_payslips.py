@@ -1,16 +1,17 @@
-from flask import Blueprint, request, jsonify, make_response
+from flask import Blueprint, request, jsonify, make_response, render_template
 from hrms_api.extensions import db
 from hrms_api.models.payroll.pay_run import PayRun, PayRunItem
 from hrms_api.models.employee import Employee
 from hrms_api.services.payslip_service import PayslipService
-from hrms_api.blueprints.auth_decorators import token_required, role_required
+from hrms_api.services.payroll_common import get_pay_run_for_period
+from hrms_api.blueprints.auth_decorators import token_required, role_required, permission_required
 
 payroll_payslips_bp = Blueprint("payroll_payslips", __name__, url_prefix="/api/v1/payroll/payslips")
 svc = PayslipService()
 
 @payroll_payslips_bp.route("", methods=["GET"])
 @token_required
-@role_required("admin", "hr_admin", "payroll_admin")
+@permission_required("payroll.payslips.view")
 def list_payslips(current_user):
     """
     List payslips for a given run (company, year, month).
@@ -22,19 +23,14 @@ def list_payslips(current_user):
     if not all([company_id, year, month]):
         return jsonify({"success": False, "error": "Missing required params: company_id, year, month"}), 400
         
-    # Find the PayRun - cast all params to int
-    runs = PayRun.query.filter(PayRun.company_id == int(company_id)).all()
-    target_run = None
-    for r in runs:
-        if r.period_start.year == int(year) and r.period_start.month == int(month):
-            target_run = r
-            break
-        
-    target_run = None
-    for r in runs:
-        if r.period_start.year == int(year) and r.period_start.month == int(month):
-            target_run = r
-            break
+    try:
+        company_id = int(company_id)
+        year = int(year)
+        month = int(month)
+    except ValueError:
+        return jsonify({"success": False, "error": "Invalid params: company_id, year, month must be integers"}), 400
+
+    target_run = get_pay_run_for_period(company_id, year, month)
             
     if not target_run:
         return jsonify({"success": False, "error": "No pay run found for this period"}), 404
@@ -65,9 +61,9 @@ def list_payslips(current_user):
             "employee_name": f"{emp.first_name} {emp.last_name or ''}".strip(),
             "department": dept.name if dept else None,
             "designation": desig.name if desig else None,
-            "net_pay": float(item.net),
-            "gross_pay": float(item.gross),
-            "days_worked": float(item.calc_meta.get("days_worked", 0)) if item.calc_meta else 0
+            "net_pay": float(item.net or 0),
+            "gross_pay": float(item.gross or 0),
+            "days_worked": float(item.calc_meta.get("days_worked", 0)) if isinstance(item.calc_meta, dict) else 0
         })
         
     return jsonify({
@@ -92,7 +88,7 @@ def list_payslips(current_user):
 
 @payroll_payslips_bp.route("/<int:employee_id>", methods=["GET"])
 @token_required
-@role_required("admin", "hr_admin", "payroll_admin")
+@permission_required("payroll.payslips.view")
 def get_payslip_dto(current_user, employee_id):
     """
     Get single payslip JSON DTO.
@@ -104,13 +100,14 @@ def get_payslip_dto(current_user, employee_id):
     if not all([company_id, year, month]):
         return jsonify({"success": False, "error": "Missing required params: company_id, year, month"}), 400
         
-    # Find Run (Duplicate logic, could be refactored)
-    runs = PayRun.query.filter(PayRun.company_id == int(company_id)).all()
-    target_run = None
-    for r in runs:
-        if r.period_start.year == int(year) and r.period_start.month == int(month):
-            target_run = r
-            break
+    try:
+        company_id = int(company_id)
+        year = int(year)
+        month = int(month)
+    except ValueError:
+        return jsonify({"success": False, "error": "Invalid params: company_id, year, month must be integers"}), 400
+
+    target_run = get_pay_run_for_period(company_id, year, month)
             
     if not target_run:
         return jsonify({"success": False, "error": "No pay run found for this period"}), 404
@@ -124,7 +121,7 @@ def get_payslip_dto(current_user, employee_id):
 
 @payroll_payslips_bp.route("/<int:employee_id>/download", methods=["GET"])
 @token_required
-@role_required("admin", "hr_admin", "payroll_admin")
+@permission_required("payroll.payslips.download")
 def download_payslip(current_user, employee_id):
     """
     Download payslip as HTML (or PDF if implemented).
@@ -137,13 +134,14 @@ def download_payslip(current_user, employee_id):
     if not all([company_id, year, month]):
         return jsonify({"success": False, "error": "Missing required params: company_id, year, month"}), 400
         
-    # Find Run
-    runs = PayRun.query.filter(PayRun.company_id == int(company_id)).all()
-    target_run = None
-    for r in runs:
-        if r.period_start.year == int(year) and r.period_start.month == int(month):
-            target_run = r
-            break
+    try:
+        company_id = int(company_id)
+        year = int(year)
+        month = int(month)
+    except ValueError:
+        return jsonify({"success": False, "error": "Invalid params: company_id, year, month must be integers"}), 400
+
+    target_run = get_pay_run_for_period(company_id, year, month)
             
     if not target_run:
         return jsonify({"success": False, "error": "No pay run found for this period"}), 404
@@ -161,6 +159,6 @@ def download_payslip(current_user, employee_id):
         html_content = svc.render_payslip_html(dto)
         response = make_response(html_content)
         response.headers["Content-Type"] = "text/html"
-        filename = f"PAYSLIP_{dto['employee']['code']}_{year}_{month}.html"
+        filename = f"PAYSLIP_{dto['employee']['code']}_{year}_{month:02d}.html"
         response.headers["Content-Disposition"] = f"attachment; filename={filename}"
         return response

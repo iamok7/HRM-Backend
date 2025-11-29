@@ -83,12 +83,17 @@ def get_report(report_id):
         }
     })
 
-@bp.route("/reports/<int:report_id>/run", methods=["POST"])
+@bp.route("/reports/<report_ref>/run", methods=["POST"])
 @jwt_required()
 @require_perm("rgs.report.run")
-def run_report(report_id):
+def run_report(report_ref):
     user_id = get_jwt_identity()
-    report = RgsReport.query.get_or_404(report_id)
+    
+    # Resolve report_ref to report
+    if report_ref.isdigit():
+        report = RgsReport.query.get_or_404(int(report_ref))
+    else:
+        report = RgsReport.query.filter_by(code=report_ref).first_or_404(description=f"Report with code '{report_ref}' not found")
 
     # Category specific permission check
     # e.g. rgs.report.run.payroll
@@ -113,7 +118,7 @@ def run_report(report_id):
     input_params = body.get("params", {})
 
     svc = get_service()
-    result = svc.run_report_sync(report_id, user_id, input_params)
+    result = svc.run_report_sync(report.id, user_id, input_params)
     
     run = result["run"]
     output = result["output"]

@@ -27,7 +27,9 @@ except Exception:
 
 # --- NEW: imports used by the tiny role attach helper ---
 from hrms_api.models.user import User
+from hrms_api.models.user import User
 from hrms_api.models.security import Role, UserRole
+from hrms_api.services.leave_policy_service import sync_balances_for_company_year
 # --------------------------------------------------------
 
 bp = Blueprint("employees", __name__, url_prefix="/api/v1/employees")
@@ -165,18 +167,37 @@ def _ensure_user_has_role(user_id: int, role_code: str = "employee") -> bool:
 
 def _attach_employee_role_if_user_exists(emp: Employee):
     """
-    Try to find a corresponding User for this employee and attach 'employee' role.
-    - Prefer emp.user_id if present.
-    - Else fallback to email match.
-    Does nothing if no user found.
+    Try to find a corresponding User for this employee.
+    - If found (by user_id or email), ensure they are linked (emp.user_id = user.id).
+    - If NOT found, CREATE a new User with default password and link.
+    - Attach 'employee' role to the user.
     """
     user = None
     uid = getattr(emp, "user_id", None)
     if uid:
         user = db.session.get(User, uid)
+    
     if user is None and emp.email:
         user = db.session.scalar(select(User).where(User.email == emp.email.lower()))
+        
+    # Auto-create user if missing
+    if user is None and emp.email:
+        try:
+            full_name = f"{emp.first_name} {emp.last_name or ''}".strip()
+            user = User(email=emp.email.lower(), full_name=full_name, status='active')
+            user.set_password("Welcome@123")
+            db.session.add(user)
+            db.session.flush() # get ID
+        except Exception:
+            # Fallback (e.g. race condition), just skip
+            pass
+
     if user:
+        # Link if not linked
+        if not emp.user_id:
+            emp.user_id = user.id
+            db.session.add(emp) # Ensure update is tracked
+            
         _ensure_user_has_role(user.id, "employee")
 
 # ------------------------------------------------------------------
@@ -264,8 +285,13 @@ def create_employee():
     email = (d.get("email") or "").strip().lower()
     first = (d.get("first_name") or "").strip()
 
-    if not (code and email and first and cid):
-        return _fail("company_id, code, first_name, email are required", 422)
+    # Auto-generate code if missing
+    if not code:
+        import time
+        code = f"EMP-{int(time.time())}"
+
+    if not (email and first and cid):
+        return _fail("company_id, first_name, email are required", 422)
 
     # FK checks (now using proper ints)
     if not Company.query.get(cid): return _fail("Invalid company_id", 422)
@@ -308,9 +334,21 @@ def create_employee():
     db.session.add(x)
     db.session.flush()  # x.id available; if a user_id is set by triggers/logic, we can see it
 
-    _attach_employee_role_if_user_exists(x)  # <--- ensures 'employee' role is linked to the User
+    _attach_employee_role_if_user_exists(x)  # <--- ensures 'employee' role is linked to the User (and creates user if missing)
 
     db.session.commit()
+    
+    # Sync leave balances
+    try:
+        sync_balances_for_company_year(
+            company_id=x.company_id,
+            year=datetime.utcnow().year,
+            employee_ids=[x.id]
+        )
+    except Exception as e:
+        # Log error but don't fail the request
+        pass
+        
     return _ok(_row(x), status=201)
 
 

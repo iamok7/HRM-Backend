@@ -1,22 +1,19 @@
-from datetime import datetime, timedelta
-from flask import Blueprint, request, jsonify
+from datetime import datetime, date
+from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
-from sqlalchemy import and_
+from sqlalchemy import and_, or_, desc
 from hrms_api.extensions import db
+from hrms_api.common.auth import requires_perms
 
 from hrms_api.models.employee import Employee
-from hrms_api.models.leave import LeaveType, LeaveBalance, LeaveRequest
-
-
-from hrms_api.common.auth import requires_perms
-from flask_jwt_extended import jwt_required
+from hrms_api.models.leave import LeaveType, EmployeeLeaveBalance, LeaveRequest, LeaveApprovalAction, CompOffCredit
+from hrms_api.models.user import User
 
 bp = Blueprint("leave", __name__, url_prefix="/api/v1/leave")
 
 def _ok(data=None, status=200): return jsonify({"success": True, "data": data}), status
-def _fail(msg, status=400): return jsonify({"success": False, "error": {"message": msg}}), status
+def _fail(msg, status=400, code=None): return jsonify({"success": False, "error": {"message": msg, "code": code}}), status
 
-# ---------- utils ----------
 def _parse_date(s):
     if not s: return None
     for fmt in ("%Y-%m-%d", "%d-%m-%Y"):
@@ -24,222 +21,331 @@ def _parse_date(s):
         except Exception: pass
     return None
 
-def _days_between(start, end, part_day=None):
-    if start > end: return 0.0
-    days = (end - start).days + 1
-    if part_day in ("half", "am", "pm"):
-        # if start==end and half day ⇒ 0.5, else naive 0.5 off total
-        return 0.5 if days == 1 else max(days - 0.5, 0.5)
-    return float(days)
-
-def _num(x):
-    try: return float(x)
-    except Exception: return 0.0
+def _get_current_year():
+    return datetime.utcnow().year
 
 # ---------- Leave Types ----------
 @bp.get("/types")
 @jwt_required()
 def list_types():
-    items = (LeaveType.query
-             .filter_by(active=True)
-             .order_by(LeaveType.code.asc())
-             .all())
+    items = LeaveType.query.filter_by(is_active=True).order_by(LeaveType.code.asc()).all()
     return _ok([{
-        "id": t.id, "company_id": t.company_id, "code": t.code, "name": t.name,
-        "unit": t.unit, "paid": bool(t.paid),
-        "accrual_per_month": float(t.accrual_per_month or 0),
-        "carry_forward_limit": float(t.carry_forward_limit or 0) if t.carry_forward_limit is not None else None,
-        "negative_balance_allowed": bool(t.negative_balance_allowed),
-        "requires_approval": bool(t.requires_approval),
-        "active": bool(t.active),
-        "created_at": t.created_at.isoformat(sep=" ")
+        "id": t.id, "code": t.code, "name": t.name,
+        "is_paid": t.is_paid, "is_comp_off": t.is_comp_off,
+        "allow_half_day": t.allow_half_day,
+        "requires_document": t.requires_document
     } for t in items])
-
-@bp.post("/types")
-@jwt_required()
-def create_type():
-    d = request.get_json(silent=True) or {}
-    req = ("company_id","code","name")
-    if any(k not in d for k in req): return _fail("company_id, code, name are required", 422)
-    t = LeaveType(
-        company_id=d["company_id"], code=d["code"].strip(), name=d["name"].strip(),
-        unit=(d.get("unit") or "day"), paid=bool(d.get("paid", True)),
-        accrual_per_month=_num(d.get("accrual_per_month", 0)),
-        carry_forward_limit=_num(d.get("carry_forward_limit")) if d.get("carry_forward_limit") is not None else None,
-        negative_balance_allowed=bool(d.get("negative_balance_allowed", False)),
-        requires_approval=bool(d.get("requires_approval", True)),
-        active=bool(d.get("active", True)),
-    )
-    db.session.add(t); db.session.commit()
-    return _ok({"id": t.id}, 201)
-
-@bp.put("/types/<int:tid>")
-@jwt_required()
-def update_type(tid: int):
-    t = LeaveType.query.get(tid)
-    if not t: return _fail("LeaveType not found", 404)
-    d = request.get_json(silent=True) or {}
-    for k in ("code","name","unit"):
-        if k in d and d[k]: setattr(t, k, d[k])
-    for k in ("paid","negative_balance_allowed","requires_approval","active"):
-        if k in d: setattr(t, k, bool(d[k]))
-    if "accrual_per_month" in d: t.accrual_per_month = _num(d["accrual_per_month"])
-    if "carry_forward_limit" in d:
-        t.carry_forward_limit = _num(d["carry_forward_limit"]) if d["carry_forward_limit"] is not None else None
-    db.session.commit()
-    return _ok({"id": t.id, "updated": True})
-
-@bp.delete("/types/<int:tid>")
-@jwt_required()
-def delete_type(tid: int):
-    t = LeaveType.query.get(tid)
-    if not t: return _fail("LeaveType not found", 404)
-    t.active = False
-    db.session.commit()
-    return _ok({"id": tid, "archived": True})
 
 # ---------- Balances ----------
 @bp.get("/balances")
 @jwt_required()
-def balances():
-    emp_id = request.args.get("employeeId", type=int)
-    if not emp_id: return _fail("employeeId is required", 422)
-    rows = (LeaveBalance.query
-            .filter(LeaveBalance.employee_id == emp_id)
-            .order_by(LeaveBalance.leave_type_id.asc())
+def get_balances():
+    emp_id = request.args.get("employee_id", type=int)
+    year = request.args.get("year", type=int) or _get_current_year()
+    
+    if not emp_id:
+        # If not provided, try to infer from current user if employee
+        user_id = get_jwt_identity()
+        # This assumes we can resolve user to employee. 
+        # For now, require employee_id explicitly or implement resolution logic.
+        # Let's require it for simplicity or check if user is employee.
+        return _fail("employee_id is required", 422)
+
+    rows = (EmployeeLeaveBalance.query
+            .filter_by(employee_id=emp_id, year=year)
+            .join(LeaveType)
+            .order_by(LeaveType.code.asc())
             .all())
-    data = [{
-        "id": r.id, "employee_id": r.employee_id, "leave_type_id": r.leave_type_id,
-        "balance": float(r.balance or 0), "ytd_accrued": float(r.ytd_accrued or 0),
-        "ytd_taken": float(r.ytd_taken or 0), "updated_at": r.updated_at.isoformat(sep=" ")
-    } for r in rows]
+    
+    data = []
+    for r in rows:
+        lt = LeaveType.query.get(r.leave_type_id)
+        data.append({
+            "leave_type": {"id": lt.id, "code": lt.code, "name": lt.name},
+            "year": r.year,
+            "opening": float(r.opening_balance),
+            "accrued": float(r.accrued),
+            "used": float(r.used),
+            "adjusted": float(r.adjusted),
+            "available": r.available
+        })
     return _ok(data)
 
-@bp.post("/balances/adjust")
+# ---------- Requests ----------
+@bp.post("/requests")
 @jwt_required()
-@requires_perms("leave.balance.adjust")
-def adjust_balance():
+def apply_leave():
     d = request.get_json(silent=True) or {}
-    emp_id = d.get("employee_id")
-    lt_id = d.get("leave_type_id")
-    if not (emp_id and lt_id): return _fail("employee_id and leave_type_id are required", 422)
-    mode = (d.get("mode") or "delta").lower()  # delta | set
-    amount = _num(d.get("amount", 0))
+    user_id = get_jwt_identity()
+    
+    # Validate required fields
+    req_fields = ("employee_id", "leave_type_id", "start_date", "end_date", "reason")
+    if any(k not in d for k in req_fields):
+        return _fail("Missing required fields", 422)
 
-    r = LeaveBalance.query.filter_by(employee_id=emp_id, leave_type_id=lt_id).first()
-    if not r:
-        r = LeaveBalance(employee_id=emp_id, leave_type_id=lt_id, balance=0, ytd_accrued=0, ytd_taken=0)
-        db.session.add(r); db.session.flush()
-
-    if mode == "set":
-        r.balance = amount
+    emp_id = d["employee_id"]
+    lt_id = d["leave_type_id"]
+    sd = _parse_date(d["start_date"])
+    ed = _parse_date(d["end_date"])
+    reason = d["reason"]
+    is_half_day = bool(d.get("is_half_day", False))
+    
+    if not (sd and ed): return _fail("Invalid dates", 422)
+    if sd > ed: return _fail("Start date cannot be after end date", 422)
+    
+    # Calculate days
+    days = (ed - sd).days + 1
+    if is_half_day:
+        if days != 1: return _fail("Half day is only allowed for single day leaves", 422)
+        total_days = 0.5
     else:
-        r.balance = _num(r.balance) + amount
-    r.updated_at = datetime.utcnow()
-    db.session.commit()
-    return _ok({"id": r.id, "employee_id": emp_id, "leave_type_id": lt_id, "balance": float(r.balance)})
+        total_days = float(days)
 
-# ---------- Requests (apply / approve / reject) ----------
+    # Check leave type
+    lt = LeaveType.query.get(lt_id)
+    if not lt or not lt.is_active: return _fail("Invalid leave type", 404)
+    
+    if is_half_day and not lt.allow_half_day:
+        return _fail("Half day not allowed for this leave type", 422)
+
+    # Check balance (if not comp-off, or handle comp-off logic)
+    # For v1, we just check balance.
+    year = sd.year
+    bal = EmployeeLeaveBalance.query.filter_by(employee_id=emp_id, leave_type_id=lt_id, year=year).first()
+    
+    # If no balance record, assume 0 available
+    available = bal.available if bal else 0.0
+    
+    # TODO: Check if negative balance allowed? Schema removed that flag.
+    # Assuming strict check for now unless configured otherwise.
+    if available < total_days:
+        return _fail(f"Insufficient balance. Available: {available}, Requested: {total_days}", 422)
+
+    # Create request
+    lr = LeaveRequest(
+        employee_id=emp_id,
+        leave_type_id=lt_id,
+        company_id=1, # TODO: Resolve from employee
+        start_date=sd,
+        end_date=ed,
+        is_half_day=is_half_day,
+        total_days=total_days,
+        reason=reason,
+        status="pending",
+        applied_by_user_id=int(user_id) if str(user_id).isdigit() else None
+    )
+    
+    # Resolve company_id from employee
+    emp = Employee.query.get(emp_id)
+    if emp:
+        lr.company_id = emp.company_id
+        
+    db.session.add(lr)
+    db.session.commit()
+    
+    return _ok({"id": lr.id, "status": lr.status, "message": "Leave request submitted"})
+
 @bp.get("/requests")
 @jwt_required()
 def list_requests():
-    emp_id = request.args.get("employeeId", type=int)
+    emp_id = request.args.get("employee_id", type=int)
     status = request.args.get("status")
+    
     q = LeaveRequest.query
-    if emp_id: q = q.filter(LeaveRequest.employee_id == emp_id)
-    if status: q = q.filter(LeaveRequest.status == status)
-    q = q.order_by(LeaveRequest.created_at.desc())
-    items = q.all()
-    return _ok([{
-        "id": r.id, "employee_id": r.employee_id, "leave_type_id": r.leave_type_id,
-        "start_date": r.start_date.isoformat(), "end_date": r.end_date.isoformat(),
-        "part_day": r.part_day, "days": float(r.days), "status": r.status,
-        "reason": r.reason, "approver_id": r.approver_id,
-        "approved_at": r.approved_at.isoformat(sep=" ") if r.approved_at else None,
-        "created_at": r.created_at.isoformat(sep=" ")
-    } for r in items])
-
-@bp.post("/requests")
-@jwt_required()
-def create_request():
-    d = request.get_json(silent=True) or {}
-    emp_id = d.get("employee_id")
-    lt_id = d.get("leave_type_id")
-    sd = _parse_date(d.get("start_date")); ed = _parse_date(d.get("end_date"))
-    part = d.get("part_day")
-    if not (emp_id and lt_id and sd and ed): return _fail("employee_id, leave_type_id, start_date, end_date required", 422)
-    if not Employee.query.get(emp_id): return _fail("Employee not found", 404)
-    if not LeaveType.query.get(lt_id): return _fail("Leave type not found", 404)
-
-    days = _days_between(sd, ed, part)
-    r = LeaveRequest(employee_id=emp_id, leave_type_id=lt_id, start_date=sd, end_date=ed,
-                     part_day=part, days=days, status="draft", reason=d.get("reason"))
-    db.session.add(r); db.session.commit()
-    return _ok({"id": r.id, "days": float(days), "status": r.status}, 201)
-
-@bp.post("/requests/<int:rid>/submit")
-@jwt_required()
-def submit_request(rid: int):
-    r = LeaveRequest.query.get(rid)
-    if not r: return _fail("Leave request not found", 404)
-    if r.status not in ("draft","rejected"): return _fail(f"Cannot submit from status {r.status}", 409)
-    r.status = "pending"
-    db.session.commit()
-    return _ok({"id": r.id, "status": r.status})
+    if emp_id:
+        q = q.filter(LeaveRequest.employee_id == emp_id)
+    if status:
+        q = q.filter(LeaveRequest.status == status)
+        
+    items = q.order_by(LeaveRequest.created_at.desc()).all()
+    
+    data = []
+    for r in items:
+        data.append({
+            "id": r.id,
+            "employee_id": r.employee_id,
+            "leave_type": r.leave_type.name if r.leave_type else None,
+            "start_date": r.start_date.isoformat(),
+            "end_date": r.end_date.isoformat(),
+            "total_days": float(r.total_days),
+            "status": r.status,
+            "reason": r.reason,
+            "created_at": r.created_at.isoformat()
+        })
+    return _ok(data)
 
 @bp.post("/requests/<int:rid>/approve")
-@requires_perms("leave.request.approve")
 @jwt_required()
-def approve_request(rid: int):
-    d = request.get_json(silent=True) or {}
-    approver_id = d.get("approver_id")  # optional for now
-    r = LeaveRequest.query.get(rid)
-    if not r: return _fail("Leave request not found", 404)
-    if r.status not in ("pending","draft"): return _fail(f"Cannot approve from status {r.status}", 409)
-
-    bal = LeaveBalance.query.filter_by(employee_id=r.employee_id, leave_type_id=r.leave_type_id).first()
-    lt = LeaveType.query.get(r.leave_type_id)
+@requires_perms("leave.request.approve")
+def approve_request(rid):
+    user_id = get_jwt_identity()
+    lr = LeaveRequest.query.get_or_404(rid)
+    
+    if lr.status != "pending":
+        return _fail(f"Cannot approve request in '{lr.status}' status", 409)
+        
+    # Deduct balance
+    year = lr.start_date.year
+    bal = EmployeeLeaveBalance.query.filter_by(employee_id=lr.employee_id, leave_type_id=lr.leave_type_id, year=year).first()
+    
     if not bal:
-        bal = LeaveBalance(employee_id=r.employee_id, leave_type_id=r.leave_type_id, balance=0, ytd_accrued=0, ytd_taken=0)
-        db.session.add(bal); db.session.flush()
-
-    if not lt.negative_balance_allowed and _num(bal.balance) < _num(r.days):
-        return _fail("Insufficient balance", 409)
-
-    # deduct
-    bal.balance = _num(bal.balance) - _num(r.days)
-    bal.ytd_taken = _num(bal.ytd_taken) + _num(r.days)
+        # Create balance record if missing (shouldn't happen if we checked at apply, but race conditions)
+        bal = EmployeeLeaveBalance(
+            employee_id=lr.employee_id,
+            leave_type_id=lr.leave_type_id,
+            year=year,
+            opening_balance=0,
+            accrued=0,
+            used=0,
+            adjusted=0
+        )
+        db.session.add(bal)
+    
+    # Check balance again
+    if bal.available < float(lr.total_days):
+        return _fail("Insufficient balance to approve", 409)
+        
+    bal.used = float(bal.used) + float(lr.total_days)
     bal.updated_at = datetime.utcnow()
-
-    r.status = "approved"
-    r.approver_id = approver_id
-    r.approved_at = datetime.utcnow()
-
+    
+    lr.status = "approved"
+    lr.approved_by_user_id = int(user_id) if str(user_id).isdigit() else None
+    lr.updated_at = datetime.utcnow()
+    
+    # Log action
+    action = LeaveApprovalAction(
+        leave_request_id=lr.id,
+        action="approve",
+        acted_by_user_id=lr.approved_by_user_id,
+        acted_at=datetime.utcnow()
+    )
+    db.session.add(action)
+    
     db.session.commit()
-    return _ok({
-        "id": r.id, "status": r.status, "approved_at": r.approved_at.isoformat(sep=" "),
-        "balance_after": float(bal.balance)
-    })
+    return _ok({"id": lr.id, "status": "approved"})
 
 @bp.post("/requests/<int:rid>/reject")
-@requires_perms("leave.request.approve")
 @jwt_required()
-def reject_request(rid: int):
+@requires_perms("leave.request.approve")
+def reject_request(rid):
+    user_id = get_jwt_identity()
     d = request.get_json(silent=True) or {}
     reason = d.get("reason")
-    r = LeaveRequest.query.get(rid)
-    if not r: return _fail("Leave request not found", 404)
-    if r.status not in ("pending","draft"): return _fail(f"Cannot reject from status {r.status}", 409)
-    r.status = "rejected"; r.reason = reason or r.reason
+    
+    lr = LeaveRequest.query.get_or_404(rid)
+    
+    if lr.status != "pending":
+        return _fail(f"Cannot reject request in '{lr.status}' status", 409)
+        
+    lr.status = "rejected"
+    lr.rejection_reason = reason
+    lr.updated_at = datetime.utcnow()
+    
+    # Log action
+    action = LeaveApprovalAction(
+        leave_request_id=lr.id,
+        action="reject",
+        comment=reason,
+        acted_by_user_id=int(user_id) if str(user_id).isdigit() else None,
+        acted_at=datetime.utcnow()
+    )
+    db.session.add(action)
+    
     db.session.commit()
-    return _ok({"id": r.id, "status": r.status})
+    return _ok({"id": lr.id, "status": "rejected"})
 
-@bp.delete("/requests/<int:rid>")
+@bp.post("/requests/<int:rid>/cancel")
 @jwt_required()
-def cancel_request(rid: int):
-    r = LeaveRequest.query.get(rid)
-    if not r: return _fail("Leave request not found", 404)
-    if r.status in ("approved","cancelled"): return _fail(f"Cannot cancel from status {r.status}", 409)
-    r.status = "cancelled"
+def cancel_request(rid):
+    user_id = get_jwt_identity()
+    lr = LeaveRequest.query.get_or_404(rid)
+    
+    # Only owner can cancel? Or admin?
+    # Assuming owner for now.
+    # TODO: Verify user_id matches employee's user_id
+    
+    if lr.status not in ("pending", "approved"):
+        return _fail(f"Cannot cancel request in '{lr.status}' status", 409)
+        
+    if lr.status == "approved":
+        # Refund balance
+        year = lr.start_date.year
+        bal = EmployeeLeaveBalance.query.filter_by(employee_id=lr.employee_id, leave_type_id=lr.leave_type_id, year=year).first()
+        if bal:
+            bal.used = float(bal.used) - float(lr.total_days)
+            bal.updated_at = datetime.utcnow()
+            
+    lr.status = "cancelled"
+    lr.updated_at = datetime.utcnow()
+    
     db.session.commit()
-    return _ok({"id": r.id, "status": r.status})
+    return _ok({"id": lr.id, "status": "cancelled"})
+
+# ---------- Comp-Off Credits ----------
+@bp.get("/comp-off/credits")
+@jwt_required()
+def list_comp_off_credits():
+    emp_id = request.args.get("employee_id", type=int)
+    if not emp_id: return _fail("employee_id is required", 422)
+    
+    items = CompOffCredit.query.filter_by(employee_id=emp_id).order_by(CompOffCredit.date_earned.desc()).all()
+    return _ok([{
+        "id": c.id,
+        "date_earned": c.date_earned.isoformat(),
+        "hours_or_days": float(c.hours_or_days),
+        "status": c.status,
+        "reason": c.reason
+    } for c in items])
+
+@bp.post("/comp-off/credits")
+@jwt_required()
+@requires_perms("leave.comp_off.manage")
+def grant_comp_off_credit():
+    d = request.get_json(silent=True) or {}
+    emp_id = d.get("employee_id")
+    date_earned = _parse_date(d.get("date_earned"))
+    amount = d.get("amount") # hours or days
+    reason = d.get("reason")
+    
+    if not (emp_id and date_earned and amount):
+        return _fail("employee_id, date_earned, amount are required", 422)
+        
+    emp = Employee.query.get(emp_id)
+    if not emp: return _fail("Employee not found", 404)
+    
+    credit = CompOffCredit(
+        employee_id=emp_id,
+        company_id=emp.company_id,
+        date_earned=date_earned,
+        hours_or_days=float(amount),
+        reason=reason,
+        status="approved" # Direct grant
+    )
+    db.session.add(credit)
+    
+    # Also add to leave balance?
+    # Spec says: "Comp-Off Accrual: Manual (HR/System via API)"
+    # And "Approved comp-off credit adds to the 'Comp-Off' leave balance."
+    # So we need to find the 'Comp-Off' leave type and add to accrued.
+    
+    co_type = LeaveType.query.filter_by(company_id=emp.company_id, is_comp_off=True).first()
+    if co_type:
+        year = date_earned.year
+        bal = EmployeeLeaveBalance.query.filter_by(employee_id=emp_id, leave_type_id=co_type.id, year=year).first()
+        if not bal:
+            bal = EmployeeLeaveBalance(
+                employee_id=emp_id,
+                leave_type_id=co_type.id,
+                year=year,
+                opening_balance=0,
+                accrued=0,
+                used=0,
+                adjusted=0
+            )
+            db.session.add(bal)
+        
+        bal.accrued = float(bal.accrued) + float(amount) # Assuming amount is in days if leave type is days
+        # TODO: Handle unit conversion if needed.
+        
+    db.session.commit()
+    return _ok({"id": credit.id, "status": "approved"})

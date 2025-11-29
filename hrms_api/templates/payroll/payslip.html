@@ -1,0 +1,276 @@
+<!doctype html>
+<html>
+
+<head>
+    <meta charset="utf-8" />
+    <title>Payslip - {{ payslip.employee.code }} - {{ payslip.run.year }}-{{ '%02d'|format(payslip.run.month) }}</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            font-size: 12px;
+            color: #333;
+        }
+
+        .container {
+            width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            border: 1px solid #ccc;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #333;
+            padding-bottom: 10px;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+            text-transform: uppercase;
+        }
+
+        .header p {
+            margin: 5px 0;
+        }
+
+        .payslip-title {
+            text-align: center;
+            font-weight: bold;
+            font-size: 16px;
+            margin: 20px 0;
+            text-decoration: underline;
+        }
+
+        .section {
+            margin-bottom: 20px;
+        }
+
+        .grid-2 {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .info-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .info-table td {
+            padding: 4px;
+        }
+
+        .label {
+            font-weight: bold;
+            width: 40%;
+        }
+
+        .earnings-deductions {
+            display: flex;
+            gap: 20px;
+        }
+
+        .ed-box {
+            flex: 1;
+            border: 1px solid #ccc;
+        }
+
+        .ed-header {
+            background: #f0f0f0;
+            padding: 5px;
+            font-weight: bold;
+            text-align: center;
+            border-bottom: 1px solid #ccc;
+        }
+
+        .ed-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .ed-table th,
+        .ed-table td {
+            padding: 5px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .ed-table th {
+            text-align: left;
+            font-size: 11px;
+            color: #666;
+        }
+
+        .ed-table td.amount {
+            text-align: right;
+        }
+
+        .ed-total {
+            font-weight: bold;
+            background: #fafafa;
+            border-top: 1px solid #ccc;
+        }
+
+        .net-pay-section {
+            margin-top: 20px;
+            border: 2px solid #333;
+            padding: 10px;
+            text-align: center;
+            font-size: 14px;
+            font-weight: bold;
+        }
+
+        .footer {
+            margin-top: 40px;
+            font-size: 10px;
+            text-align: center;
+            color: #666;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ payslip.company.name }}</h1>
+            <p>
+                {{ payslip.company.address_line1 or '' }}
+                {% if payslip.company.address_line2 %}, {{ payslip.company.address_line2 }}{% endif %}
+                {% if payslip.company.city %}, {{ payslip.company.city }}{% endif %}
+                {% if payslip.company.state %}, {{ payslip.company.state }}{% endif %}
+            </p>
+        </div>
+
+        <div class="payslip-title">
+            Payslip for {{ payslip.run.month }}/{{ payslip.run.year }}
+        </div>
+
+        <div class="section grid-2">
+            <div>
+                <table class="info-table">
+                    <tr>
+                        <td class="label">Employee Code:</td>
+                        <td>{{ payslip.employee.code }}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">Name:</td>
+                        <td>{{ payslip.employee.name }}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">Department:</td>
+                        <td>{{ payslip.employee.department or '-' }}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">Designation:</td>
+                        <td>{{ payslip.employee.designation or '-' }}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">Location:</td>
+                        <td>{{ payslip.employee.location or '-' }}</td>
+                    </tr>
+                </table>
+            </div>
+            <div>
+                <table class="info-table">
+                    <tr>
+                        <td class="label">Bank Name:</td>
+                        <td>{{ payslip.employee.bank_name or '-' }}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">Account No:</td>
+                        <td>{{ payslip.employee.bank_account_number or '-' }}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">PAN:</td>
+                        <td>{{ payslip.employee.pan or '-' }}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">UAN:</td>
+                        <td>{{ payslip.employee.uan or '-' }}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">PF No:</td>
+                        <td>{{ payslip.employee.pf_number or '-' }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="section grid-2">
+            <div>
+                <table class="info-table">
+                    <tr>
+                        <td class="label">Days in Month:</td>
+                        <td>{{ payslip.attendance.days_in_period }}</td>
+                    </tr>
+                    <tr>
+                        <td class="label">Days Worked:</td>
+                        <td>{{ payslip.attendance.days_worked }}</td>
+                    </tr>
+                </table>
+            </div>
+            <div>
+                <table class="info-table">
+                    <tr>
+                        <td class="label">LOP Days:</td>
+                        <td>{{ payslip.attendance.lop_days }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="earnings-deductions">
+            <div class="ed-box">
+                <div class="ed-header">Earnings</div>
+                <table class="ed-table">
+                    <tr>
+                        <th>Component</th>
+                        <th>Amount</th>
+                    </tr>
+                    {% for earn in payslip.earnings %}
+                    <tr>
+                        <td>{{ earn.name }}</td>
+                        <td class="amount">{{ "%.2f"|format(earn.amount) }}</td>
+                    </tr>
+                    {% endfor %}
+                    <tr class="ed-total">
+                        <td>Total Earnings</td>
+                        <td class="amount">{{ "%.2f"|format(payslip.earnings_summary.gross_earnings) }}</td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="ed-box">
+                <div class="ed-header">Deductions</div>
+                <table class="ed-table">
+                    <tr>
+                        <th>Component</th>
+                        <th>Amount</th>
+                    </tr>
+                    {% for ded in payslip.deductions %}
+                    <tr>
+                        <td>{{ ded.name }}</td>
+                        <td class="amount">{{ "%.2f"|format(ded.amount) }}</td>
+                    </tr>
+                    {% endfor %}
+                    <tr class="ed-total">
+                        <td>Total Deductions</td>
+                        <td class="amount">{{ "%.2f"|format(payslip.deductions_summary.total_deductions) }}</td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+
+        <div class="net-pay-section">
+            Net Pay: {{ "%.2f"|format(payslip.totals.net_pay) }}
+        </div>
+
+        <div class="footer">
+            <p>This is a computer-generated document and does not require a signature.</p>
+            <p>Generated on: {{ payslip.run.processed_on or 'N/A' }}</p>
+        </div>
+    </div>
+</body>
+
+</html>

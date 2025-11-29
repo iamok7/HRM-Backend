@@ -88,6 +88,7 @@ def create_app(config_object: str | None = None):
     from hrms_api.blueprints.attendance_self_punch import bp as attendance_self_punch_bp
     from hrms_api.blueprints.attendance_punch_import import bp as attendance_punch_import_bp
     from hrms_api.blueprints.leave import bp as leave_bp
+    from hrms_api.blueprints.leave_policies import bp as leave_policies_bp
     from hrms_api.blueprints.attendance_missed_punch import bp as attendance_missed_bp
     from hrms_api.blueprints.security import bp as security_bp
     from .rbac import bp as rbac_bp
@@ -126,6 +127,7 @@ def create_app(config_object: str | None = None):
     app.register_blueprint(attendance_punch_import_bp)
     app.register_blueprint(attendance_face_bp)
     app.register_blueprint(leave_bp)
+    app.register_blueprint(leave_policies_bp)
     app.register_blueprint(attendance_missed_bp)
     app.register_blueprint(security_bp)
     app.register_blueprint(rbac_bp)
@@ -139,7 +141,11 @@ def create_app(config_object: str | None = None):
     app.register_blueprint(pay_compliance_bp)
     app.register_blueprint(attendance_rollup_bp)
     from hrms_api.blueprints.rgs import bp as rgs_bp
+    from hrms_api.blueprints.rgs import bp as rgs_bp
     app.register_blueprint(rgs_bp)
+    
+    from hrms_api.blueprints.hr_dashboard import bp as hr_dashboard_bp
+    app.register_blueprint(hr_dashboard_bp)
     
     # Payslips
     from hrms_api.blueprints.payroll_payslips import payroll_payslips_bp
@@ -626,7 +632,7 @@ def create_app(config_object: str | None = None):
 
     @app.cli.command("seed-leave-balances-10")
     def seed_leave_balances_10():
-        from hrms_api.models.leave import LeaveType, LeaveBalance
+        from hrms_api.models.leave import LeaveType, EmployeeLeaveBalance
         from hrms_api.models.employee import Employee
 
         emp_ids = [e.id for e in Employee.query.filter(Employee.id.between(1, 10)).all()]
@@ -635,24 +641,27 @@ def create_app(config_object: str | None = None):
             click.echo("Need employees 1..10 and leave types. Run seed-demo-all and seed-leave-types.")
             return
         created = 0
+        year = 2025
         for eid in emp_ids:
             for t in types:
-                b = LeaveBalance.query.filter_by(employee_id=eid, leave_type_id=t.id).first()
+                b = EmployeeLeaveBalance.query.filter_by(employee_id=eid, leave_type_id=t.id, year=year).first()
                 if not b:
                     # starter packs
                     start_bal = 12.0 if t.code == "CL" else 7.0 if t.code == "SL" else 15.0
-                    b = LeaveBalance(
+                    b = EmployeeLeaveBalance(
                         employee_id=eid,
                         leave_type_id=t.id,
-                        balance=start_bal,
-                        ytd_accrued=start_bal,
-                        ytd_taken=0,
+                        year=year,
+                        opening_balance=start_bal,
+                        accrued=0,
+                        used=0,
+                        adjusted=0
                     )
                     db.session.add(b)
                     created += 1
         db.session.commit()
         click.echo(
-            f"Leave balances ensured for emp1..10 across {len(types)} types: created={created}"
+            f"Leave balances ensured for emp1..10 across {len(types)} types for year {year}: created={created}"
         )
 
     @app.cli.command("seed-rbac")
@@ -797,6 +806,203 @@ ORDER BY e.code;
             p2 = RgsReportParameter(report_id=r2.id, name="pay_run_id", label="Pay Run ID", type="int", is_required=True, order_index=2)
             db.session.add_all([p1, p2])
             click.echo("Seeded PAYROLL_REGISTER")
+
+    @app.cli.command("seed-rgs-compliance")
+    def seed_rgs_compliance():
+        """Seed Statutory Compliance RGS report (PAYROLL_COMPLIANCE_MONTHLY)."""
+        from hrms_api.models.rgs import RgsReport, RgsReportParameter
+        from hrms_api.models.user import User
+        
+        admin = User.query.filter_by(email="admin@demo.local").first()
+        if not admin:
+            admin = User.query.first()
+            if not admin:
+                click.echo("No users found. Run seed-core first.")
+                return
+
+        code = "PAYROLL_COMPLIANCE_MONTHLY"
+        r = RgsReport.query.filter_by(code=code).first()
+        if r:
+            click.echo(f"Report {code} already exists. Skipping.")
+            return
+
+        query = """
+WITH run AS (
+    SELECT pr.*
+    FROM pay_runs pr
+    WHERE pr.company_id = :company_id
+      AND EXTRACT(YEAR FROM pr.period_start) = :year
+      AND EXTRACT(MONTH FROM pr.period_start) = :month
+    ORDER BY
+      CASE COALESCE(pr.status, 'draft')
+        WHEN 'locked' THEN 3
+        WHEN 'approved' THEN 2
+        WHEN 'calculated' THEN 1
+        ELSE 0
+      END DESC,
+      pr.id DESC
+    LIMIT 1
+),
+base AS (
+    SELECT
+        r.id                                  AS pay_run_id,
+        r.company_id                          AS company_id,
+        r.period_start,
+        r.period_end,
+
+        e.id                                  AS employee_id,
+        e.code                                AS emp_code,
+        (e.first_name || ' ' || COALESCE(e.last_name, '')) AS employee_name,
+        d.name                                AS department,
+        desig.name                            AS designation,
+        loc.name                              AS location,
+        g.name                                AS grade,
+        cc.code                               AS cost_center,
+        e.employment_type,
+        e.status,
+
+        -- statutory ids (Mocked as NULL since columns missing in DB)
+        NULL                                  AS uan,
+        NULL                                  AS pf_number,
+        NULL                                  AS esi_number,
+        NULL                                  AS pan,
+
+        -- gross/net from item
+        COALESCE(i.gross, 0)                  AS gross_pay,
+        COALESCE(i.net, COALESCE(i.gross, 0)) AS net_pay,
+
+        l.amount                              AS line_amount,
+        sc.code                               AS comp_code,
+        sc.type                               AS comp_type
+    FROM run r
+    JOIN pay_run_items i       ON i.pay_run_id = r.id
+    JOIN employees e           ON e.id = i.employee_id
+    LEFT JOIN departments d    ON d.id = e.department_id
+    LEFT JOIN designations desig ON desig.id = e.designation_id
+    LEFT JOIN locations loc    ON loc.id = e.location_id
+    LEFT JOIN grades g         ON g.id = e.grade_id
+    LEFT JOIN cost_centers cc  ON cc.id = e.cost_center_id
+    LEFT JOIN pay_run_item_lines l
+           ON l.item_id = i.id
+    LEFT JOIN salary_components sc
+           ON sc.id = l.component_id
+)
+SELECT
+    b.company_id,
+    c.name                          AS company_name,
+    EXTRACT(YEAR FROM b.period_start)::int  AS year,
+    EXTRACT(MONTH FROM b.period_start)::int AS month,
+    b.pay_run_id,
+    b.period_start,
+    b.period_end,
+
+    b.employee_id,
+    b.emp_code,
+    b.employee_name,
+    b.department,
+    b.designation,
+    b.location,
+    b.grade,
+    b.cost_center,
+    b.employment_type,
+    b.status,
+
+    b.uan,
+    b.pf_number,
+    b.esi_number,
+    b.pan,
+
+    -- PF
+    SUM(
+      CASE WHEN b.comp_code IN ('BASIC','HRA','SPL_ALLOW','SPECIAL')
+           THEN b.line_amount ELSE 0 END
+    )                                  AS pf_wages,
+    SUM(CASE WHEN b.comp_code IN ('PF_EMP') THEN b.line_amount ELSE 0 END)
+                                       AS pf_employee,
+    SUM(CASE WHEN b.comp_code IN ('PF_ER','PF_ER_EPF','PF_ER_EPS')
+             THEN b.line_amount ELSE 0 END)
+                                       AS pf_employer,
+    SUM(CASE WHEN b.comp_code IN ('PF_EMP','PF_ER','PF_ER_EPF','PF_ER_EPS')
+             THEN b.line_amount ELSE 0 END)
+                                       AS pf_total,
+
+    -- ESI
+    SUM(
+      CASE WHEN b.comp_code IN ('BASIC','HRA','SPL_ALLOW','SPECIAL')
+           THEN b.line_amount ELSE 0 END
+    )                                  AS esi_wages,
+    SUM(CASE WHEN b.comp_code = 'ESI_EMP' THEN b.line_amount ELSE 0 END)
+                                       AS esi_employee,
+    SUM(CASE WHEN b.comp_code = 'ESI_ER' THEN b.line_amount ELSE 0 END)
+                                       AS esi_employer,
+    SUM(CASE WHEN b.comp_code IN ('ESI_EMP','ESI_ER')
+             THEN b.line_amount ELSE 0 END)
+                                       AS esi_total,
+
+    -- PT
+    SUM(
+      CASE WHEN b.comp_code IN ('BASIC','HRA','SPL_ALLOW','SPECIAL')
+           THEN b.line_amount ELSE 0 END
+    )                                  AS pt_wages,
+    SUM(CASE WHEN b.comp_code IN ('PT','PT_MH')
+             THEN b.line_amount ELSE 0 END)
+                                       AS professional_tax,
+
+    -- LWF
+    SUM(
+      CASE WHEN b.comp_code IN ('BASIC','HRA','SPL_ALLOW','SPECIAL')
+           THEN b.line_amount ELSE 0 END
+    )                                  AS lwf_wages,
+    SUM(CASE WHEN b.comp_code IN ('LWF','LWF_EMP')
+             THEN b.line_amount ELSE 0 END)
+                                       AS lwf_employee,
+    SUM(CASE WHEN b.comp_code = 'LWF_ER'
+             THEN b.line_amount ELSE 0 END)
+                                       AS lwf_employer,
+    SUM(CASE WHEN b.comp_code IN ('LWF','LWF_EMP','LWF_ER')
+             THEN b.line_amount ELSE 0 END)
+                                       AS lwf_total,
+
+    -- Totals for cross-check
+    SUM(CASE WHEN b.comp_type = 'earning'
+             THEN b.line_amount ELSE 0 END)
+                                       AS gross_earnings,
+    SUM(CASE WHEN b.comp_type = 'deduction'
+             THEN b.line_amount ELSE 0 END)
+                                       AS total_deductions,
+    b.net_pay
+
+FROM base b
+LEFT JOIN companies c ON c.id = b.company_id
+GROUP BY
+    b.company_id, c.name,
+    b.pay_run_id, b.period_start, b.period_end,
+    b.employee_id, b.emp_code, b.employee_name,
+    b.department, b.designation, b.location, b.grade, b.cost_center,
+    b.employment_type, b.status,
+    b.uan, b.pf_number, b.esi_number, b.pan,
+    b.net_pay
+ORDER BY b.emp_code;
+"""
+        r = RgsReport(
+            code=code,
+            name="Payroll – Statutory Compliance (Monthly)",
+            description="Monthly PF/ESI/PT/LWF register",
+            category="payroll",
+            output_format="xlsx",
+            created_by_user_id=admin.id,
+            query_template=query
+        )
+        db.session.add(r)
+        db.session.flush()
+
+        p1 = RgsReportParameter(report_id=r.id, name="company_id", label="Company", type="int", is_required=True, order_index=1)
+        p2 = RgsReportParameter(report_id=r.id, name="month", label="Month", type="int", is_required=True, order_index=2)
+        p3 = RgsReportParameter(report_id=r.id, name="year", label="Year", type="int", is_required=True, order_index=3)
+        db.session.add_all([p1, p2, p3])
+        
+        db.session.commit()
+        click.echo(f"Seeded {code}")
 
         db.session.commit()
 

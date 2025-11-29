@@ -13,6 +13,7 @@ class Employee(db.Model):
     grade_id       = db.Column(db.Integer, db.ForeignKey("grades.id", ondelete="RESTRICT"), nullable=True)
     cost_center_id = db.Column(db.Integer, db.ForeignKey("cost_centers.id", ondelete="RESTRICT"), nullable=True)
     manager_id     = db.Column(db.Integer, db.ForeignKey("employees.id", ondelete="SET NULL"), nullable=True)
+    user_id        = db.Column(db.Integer, db.ForeignKey("users.id", ondelete="SET NULL"), nullable=True, unique=True)
 
     code  = db.Column(db.String(32), nullable=False)    # unique per company
     email = db.Column(db.String(255), unique=True, nullable=False)
