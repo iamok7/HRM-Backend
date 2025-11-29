@@ -59,6 +59,7 @@ class PayRunItem(db.Model):
 
     pay_run = db.relationship("PayRun", lazy="joined")
     employee = db.relationship("Employee", lazy="joined")
+    lines = db.relationship("PayRunItemLine", foreign_keys="PayRunItemLine.item_id", lazy="joined")
 
 
 class PayRunItemLine(db.Model):

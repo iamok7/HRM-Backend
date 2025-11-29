@@ -1,0 +1,1055 @@
+{
+  "info": {
+    "_postman_id": "e0a1b9e4-0d6c-4a23-a3f0-hrms-attendance-full",
+    "name": "HRMS - Attendance APIs (Full URLs, localhost:5000)",
+    "description": "All attendance-related APIs with full URLs pointing to http://localhost:5000.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Attendance - Masters",
+      "item": [
+        {
+          "name": "Holidays - List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/holidays?companyId=1&locationId=1&page=1&limit=50",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "holidays"
+              ],
+              "query": [
+                {
+                  "key": "companyId",
+                  "value": "1"
+                },
+                {
+                  "key": "locationId",
+                  "value": "1"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Holidays - Create",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": 1,\n  \"location_id\": 1,\n  \"name\": \"Diwali\",\n  \"date\": \"2025-10-20\",\n  \"is_optional\": false,\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/holidays",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "holidays"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Holidays - Update (id=1)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Diwali (Updated)\",\n  \"date\": \"2025-10-21\",\n  \"is_optional\": false,\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/holidays/1",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "holidays",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Holidays - Delete (id=1)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/holidays/1",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "holidays",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Weekly Off Rules - List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/weekly-off?companyId=1&locationId=1&is_active=true&page=1&limit=50",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "weekly-off"
+              ],
+              "query": [
+                {
+                  "key": "companyId",
+                  "value": "1"
+                },
+                {
+                  "key": "locationId",
+                  "value": "1"
+                },
+                {
+                  "key": "is_active",
+                  "value": "true"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Weekly Off Rules - Create",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": 1,\n  \"location_id\": 1,\n  \"name\": \"Standard Weekend\",\n  \"weekly_off_days\": [\"SAT\", \"SUN\"],\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/weekly-off",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "weekly-off"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Weekly Off Rules - Update (id=1)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Weekend + 2nd Sat\",\n  \"weekly_off_days\": [\"SUN\"],\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/weekly-off/1",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "weekly-off",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Weekly Off Rules - Delete (id=1)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/weekly-off/1",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "weekly-off",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shifts - List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/shifts?companyId=1&page=1&limit=50",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "shifts"
+              ],
+              "query": [
+                {
+                  "key": "companyId",
+                  "value": "1"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shifts - Create",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": 1,\n  \"name\": \"General Shift\",\n  \"code\": \"GEN\",\n  \"start_time\": \"09:00\",\n  \"end_time\": \"18:00\",\n  \"break_minutes\": 60,\n  \"is_night_shift\": false,\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/shifts",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "shifts"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shifts - Get by ID (shift_id=1)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/shifts/1",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "shifts",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shifts - Update (shift_id=1)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"General Shift (Updated)\",\n  \"start_time\": \"10:00\",\n  \"end_time\": \"19:00\",\n  \"break_minutes\": 60,\n  \"is_night_shift\": false,\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/shifts/1",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "shifts",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shifts - Delete (shift_id=1)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/masters/shifts/1",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "shifts",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Shift Assignments",
+      "item": [
+        {
+          "name": "Shift Assignments - List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/shift-assignments?employeeId=1&from=2025-11-01&to=2025-11-30&page=1&limit=50",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "shift-assignments"
+              ],
+              "query": [
+                {
+                  "key": "employeeId",
+                  "value": "1"
+                },
+                {
+                  "key": "from",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2025-11-30"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shift Assignments - Create",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employee_id\": 1,\n  \"shift_id\": 1,\n  \"start_date\": \"2025-11-01\",\n  \"end_date\": null,\n  \"auto_close\": true\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/shift-assignments",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "shift-assignments"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shift Assignments - Update (id=1)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shift_id\": 1,\n  \"start_date\": \"2025-11-01\",\n  \"end_date\": \"2025-11-30\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/shift-assignments/1",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "shift-assignments",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shift Assignments - Delete (id=1)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/shift-assignments/1",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "shift-assignments",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Calendar & Monthly",
+      "item": [
+        {
+          "name": "Calendar - Employee Monthly View",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/calendar?employeeId=1&year=2025&month=11&includePunches=true&includeShift=true",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "calendar"
+              ],
+              "query": [
+                {
+                  "key": "employeeId",
+                  "value": "1"
+                },
+                {
+                  "key": "year",
+                  "value": "2025"
+                },
+                {
+                  "key": "month",
+                  "value": "11"
+                },
+                {
+                  "key": "includePunches",
+                  "value": "true"
+                },
+                {
+                  "key": "includeShift",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Monthly Status - Employee",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/monthly-status?employeeId=1&year=2025&month=11",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "monthly-status"
+              ],
+              "query": [
+                {
+                  "key": "employeeId",
+                  "value": "1"
+                },
+                {
+                  "key": "year",
+                  "value": "2025"
+                },
+                {
+                  "key": "month",
+                  "value": "11"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Punches & Import",
+      "item": [
+        {
+          "name": "Punches - List (Admin/HR)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/punches?employeeId=1&from=2025-11-01&to=2025-11-01&page=1&limit=50",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "punches"
+              ],
+              "query": [
+                {
+                  "key": "employeeId",
+                  "value": "1"
+                },
+                {
+                  "key": "from",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Punches - Create (Admin/HR)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employee_id\": 1,\n  \"ts\": \"2025-11-01T09:00:00\",\n  \"direction\": \"in\",\n  \"source\": \"manual_admin\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/punches",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "punches"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Punches - Delete (id=1)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/punches/1",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "punches",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Punches - Import from Sheet (CSV)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/punches/import",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "punches",
+                "import"
+              ]
+            },
+            "description": "Upload a CSV file with punches. Columns depend on backend implementation (e.g. employee_code, ts, direction...)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Self Punch (Employee)",
+      "item": [
+        {
+          "name": "Self Punches - List My Punches",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/self-punches?from=2025-11-01&to=2025-11-01&page=1&limit=50",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "self-punches"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Self Punches - Mark In/Out (Face/Device)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ts\": \"2025-11-01T09:05:00\",\n  \"direction\": \"in\",\n  \"source\": \"self_app\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/self-punches",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "self-punches"
+              ]
+            },
+            "description": "For face recognition / mobile app / kiosk: call this as the logged-in employee."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Missed Punch",
+      "item": [
+        {
+          "name": "Missed Punch - List",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/missed-punch?employeeId=1&from=2025-11-01&to=2025-11-30&status=pending&page=1&limit=50",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "missed-punch"
+              ],
+              "query": [
+                {
+                  "key": "employeeId",
+                  "value": "1"
+                },
+                {
+                  "key": "from",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2025-11-30"
+                },
+                {
+                  "key": "status",
+                  "value": "pending"
+                },
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "limit",
+                  "value": "50"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Missed Punch - Create Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employee_id\": 1,\n  \"req_date\": \"2025-11-01\",\n  \"in_time\": \"09:05\",\n  \"out_time\": \"18:10\",\n  \"reason\": \"Forgot to punch\",\n  \"remarks\": null\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/missed-punch",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "missed-punch"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Missed Punch - Approve (id=1)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"approver_remarks\": \"Approved\",\n  \"status\": \"approved\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/missed-punch/1/approve",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "missed-punch",
+                "1",
+                "approve"
+              ]
+            },
+            "description": "Approver approves the missed punch; backend will upsert punches and recompute daily status."
+          },
+          "response": []
+        },
+        {
+          "name": "Missed Punch - Reject (id=1)",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"approver_remarks\": \"Insufficient justification\",\n  \"status\": \"rejected\"\n}"
+            },
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance/missed-punch/1/reject",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "missed-punch",
+                "1",
+                "reject"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Rollup (For Payroll)",
+      "item": [
+        {
+          "name": "Attendance Rollup - Company Range",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "http://localhost:5000/api/v1/attendance-rollup?companyId=1&from=2025-11-01&to=2025-11-30",
+              "protocol": "http",
+              "host": [
+                "localhost"
+              ],
+              "port": "5000",
+              "path": [
+                "api",
+                "v1",
+                "attendance-rollup"
+              ],
+              "query": [
+                {
+                  "key": "companyId",
+                  "value": "1"
+                },
+                {
+                  "key": "from",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2025-11-30"
+                }
+              ]
+            },
+            "description": "Rollup of attendance for the date range per employee, used by payroll/compliance."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}

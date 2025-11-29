@@ -31,8 +31,12 @@ DEFAULT_PERMS = [
     "leave.types.read","leave.types.manage","leave.balance.read","leave.balance.adjust",
     "leave.request.create","leave.request.approve",
 
-    # Reports
-    "reports.view",
+    # Reports (RGS)
+    "rgs.report.view",
+    "rgs.report.run",
+    "rgs.report.run.attendance",
+    "rgs.report.run.payroll",
+    "rgs.report.run.compliance",
 
     # Payroll (MVP placeholder)
     "payroll.run","payroll.view",
@@ -45,13 +49,15 @@ ROLE_PERM_MAP = {
         "employee.read",
         "attendance.punch.read","attendance.missed.read","attendance.missed.approve",
         "attendance.calendar.read","attendance.monthly.read",
-        "leave.request.approve","reports.view",
+        "leave.request.approve",
+        "rgs.report.view", "rgs.report.run", "rgs.report.run.attendance",
     ],
     "employee": [
         "employee.read",
         "attendance.punch.read","attendance.punch.create",
         "attendance.missed.read",
         "leave.request.create","leave.balance.read",
+        "rgs.report.view", "rgs.report.run", "rgs.report.run.attendance",
     ],
 }
 

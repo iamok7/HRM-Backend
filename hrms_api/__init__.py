@@ -28,6 +28,12 @@ def create_app(config_object: str | None = None):
         "postgresql+psycopg2://postgres:4445@127.0.0.1:5432/hrms_dev",
     )
     app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
+    
+    # Absolute path for reports storage to avoid CWD issues
+    # app.root_path is usually .../apps/backend/hrms_api
+    # We want .../apps/backend/reports_storage
+    backend_root = os.path.dirname(app.root_path)
+    app.config["REPORTS_STORAGE_ROOT"] = os.path.join(backend_root, "reports_storage")
 
     # 🔑 Try loading external config, but don't crash if missing
     if config_object:
@@ -132,7 +138,14 @@ def create_app(config_object: str | None = None):
     app.register_blueprint(pay_runs_bp)
     app.register_blueprint(pay_compliance_bp)
     app.register_blueprint(attendance_rollup_bp)
-    app.register_blueprint(pay_adjustments_bp)
+    from hrms_api.blueprints.rgs import bp as rgs_bp
+    app.register_blueprint(rgs_bp)
+    
+    # Payslips
+    from hrms_api.blueprints.payroll_payslips import payroll_payslips_bp
+    from hrms_api.blueprints.self_service import self_service_bp
+    app.register_blueprint(payroll_payslips_bp)
+    app.register_blueprint(self_service_bp)
 
     # Warm auth / RBAC settings
     with app.app_context():
@@ -690,5 +703,101 @@ def create_app(config_object: str | None = None):
                 new_links += 1
         db.session.commit()
         click.echo(f"Granted {new_links} permissions to role '{role_code}'")
+
+    @app.cli.command("seed-rgs")
+    def seed_rgs():
+        """Seed initial RGS reports."""
+        from hrms_api.models.rgs import RgsReport, RgsReportParameter
+        from hrms_api.models.user import User
+        
+        # Ensure admin user exists for 'created_by'
+        admin = User.query.filter_by(email="admin@demo.local").first()
+        if not admin:
+            # Fallback to any user or create one?
+            # For now, just try to find ANY user
+            admin = User.query.first()
+            if not admin:
+                click.echo("No users found. Run seed-core first.")
+                return
+
+        # 1. Attendance Monthly
+        r1 = RgsReport.query.filter_by(code="ATTENDANCE_MONTHLY").first()
+        if not r1:
+            r1 = RgsReport(
+                code="ATTENDANCE_MONTHLY",
+                name="Attendance – Monthly Summary",
+                description="Per-employee monthly attendance rollup",
+                category="attendance",
+                output_format="xlsx",
+                created_by_user_id=admin.id,
+                query_template="""
+SELECT
+    e.id AS employee_id,
+    e.code AS emp_code,
+    e.first_name || ' ' || e.last_name AS name,
+    d.name AS department,
+    r.year,
+    r.month,
+    r.present_days,
+    r.absent_days,
+    r.leave_days,
+    r.weekly_off_days,
+    r.holiday_days
+FROM attendance_rollups r
+JOIN employees e ON e.id = r.employee_id
+LEFT JOIN departments d ON d.id = e.department_id
+WHERE
+    r.company_id = :company_id
+    AND r.year = :year
+    AND r.month = :month
+ORDER BY e.code;
+"""
+            )
+            db.session.add(r1)
+            db.session.flush()
+            
+            # Params
+            p1 = RgsReportParameter(report_id=r1.id, name="company_id", label="Company", type="int", is_required=True, order_index=1)
+            p2 = RgsReportParameter(report_id=r1.id, name="month", label="Month", type="int", is_required=True, order_index=2)
+            p3 = RgsReportParameter(report_id=r1.id, name="year", label="Year", type="int", is_required=True, order_index=3)
+            db.session.add_all([p1, p2, p3])
+            click.echo("Seeded ATTENDANCE_MONTHLY")
+
+        # 2. Payroll Register (Placeholder query)
+        r2 = RgsReport.query.filter_by(code="PAYROLL_REGISTER").first()
+        if not r2:
+            r2 = RgsReport(
+                code="PAYROLL_REGISTER",
+                name="Payroll Register",
+                description="Salary register for a pay run",
+                category="payroll",
+                output_format="xlsx",
+                created_by_user_id=admin.id,
+                query_template="""
+SELECT
+    pr.id AS run_id,
+    e.code AS emp_code,
+    e.first_name || ' ' || e.last_name AS name,
+    pri.net_pay,
+    pri.gross_pay,
+    pri.total_deductions
+FROM pay_run_items pri
+JOIN pay_runs pr ON pr.id = pri.pay_run_id
+JOIN employees e ON e.id = pri.employee_id
+WHERE
+    pr.company_id = :company_id
+    AND pr.id = :pay_run_id
+ORDER BY e.code;
+"""
+            )
+            db.session.add(r2)
+            db.session.flush()
+
+            p1 = RgsReportParameter(report_id=r2.id, name="company_id", label="Company", type="int", is_required=True, order_index=1)
+            p2 = RgsReportParameter(report_id=r2.id, name="pay_run_id", label="Pay Run ID", type="int", is_required=True, order_index=2)
+            db.session.add_all([p1, p2])
+            click.echo("Seeded PAYROLL_REGISTER")
+
+        db.session.commit()
 
     return app

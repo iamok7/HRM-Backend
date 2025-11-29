@@ -1,7 +1,7 @@
 # hrms_api/blueprints/attendance_rollup.py
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Dict, Any, Iterable, Optional, List
 
 from flask import Blueprint, request, jsonify
@@ -328,15 +328,145 @@ def get_rollup():
     )
 
 
-# Optional: tiny health/debug
-@bp.get("/_capability")
-@requires_perms("payroll.attendance.read")
-def capability():
+from hrms_api.models.attendance_rollup import AttendanceRollup
+from hrms_api.models.employee import Employee
+import calendar
+
+# ... (existing imports)
+
+# ---------------- generation ----------------
+def generate_rollups_for_period(company_id: int, year: int, month: int):
     """
-    Quick probe used by UI/support tools to see what this environment supports.
+    Computes rollups for all employees in the company for the given month
+    and saves/updates them in the attendance_rollups table.
     """
-    caps = {
-        "attendance_monthly": _has_table("attendance_monthly"),
-        "attendance_punches": _has_table("attendance_punches"),
-    }
-    return _ok(caps)
+    # 1. Get all employees
+    employees = Employee.query.filter_by(company_id=company_id, status="active").all()
+    if not employees:
+        return 0
+
+    emp_ids = [e.id for e in employees]
+    
+    # 2. Compute rollups using existing logic
+    # Determine date range
+    last_day = calendar.monthrange(year, month)[1]
+    d_from = date(year, month, 1)
+    d_to = date(year, month, last_day)
+    
+    # Use existing compute_rollup logic
+    # Note: compute_rollup returns a dict of dicts
+    rollup_data = compute_rollup(company_id, d_from, d_to, emp_ids)
+    
+    # 3. Fetch Holidays and Weekly Offs for accurate calculation
+    # Fetch holidays in this month
+    from hrms_api.models.attendance import Holiday, WeeklyOffRule
+    
+    holidays = Holiday.query.filter(
+        Holiday.company_id == company_id,
+        Holiday.date >= d_from,
+        Holiday.date <= d_to
+    ).all()
+    holiday_dates = {h.date for h in holidays}
+    
+    # Fetch weekly off rules (simplified: global for company)
+    # In reality, this should be per location/employee, but for demo/MVP this is fine
+    weekly_off_rules = WeeklyOffRule.query.filter_by(company_id=company_id).all()
+    weekly_off_days_set = {r.weekday for r in weekly_off_rules} # 0=Mon, 6=Sun
+    
+    # Calculate total working days, holidays, weekly offs for the month
+    # This is "potential" days. Actual present days come from rollup_data.
+    
+    month_days = [d_from + timedelta(days=i) for i in range((d_to - d_from).days + 1)]
+    
+    count = 0
+    for emp_id, data in rollup_data.items():
+        # Find existing or create new
+        rollup = AttendanceRollup.query.filter_by(
+            employee_id=emp_id,
+            year=year,
+            month=month
+        ).first()
+        
+        if not rollup:
+            rollup = AttendanceRollup(
+                employee_id=emp_id,
+                company_id=company_id,
+                year=year,
+                month=month
+            )
+            db.session.add(rollup)
+        
+        # Basic data from punches
+        present_days = data.get("days_worked", 0)
+        ot_hours = data.get("ot_hours", 0)
+        
+        # Calculate derived metrics
+        # For each day in month:
+        # If holiday -> holiday_days++
+        # Elif weekly_off -> weekly_off_days++
+        # Else -> working_day
+        
+        # Note: If an employee worked on a holiday/weekly off, present_days will include it.
+        # We need to be careful not to double count or under count.
+        # For this demo/MVP:
+        # present_days = count of days with punches
+        # holiday_days = count of holidays in month
+        # weekly_off_days = count of weekly offs in month (excluding holidays if overlap)
+        # absent_days = total_days - present_days - holiday_days - weekly_off_days
+        # (Assuming no leaves for now)
+        
+        calc_holidays = 0
+        calc_weekly_offs = 0
+        
+        for d in month_days:
+            if d in holiday_dates:
+                calc_holidays += 1
+            elif d.weekday() in weekly_off_days_set:
+                calc_weekly_offs += 1
+                
+        # Update fields
+        rollup.present_days = present_days
+        rollup.holiday_days = calc_holidays
+        rollup.weekly_off_days = calc_weekly_offs
+        rollup.ot_hours = ot_hours
+        rollup.leave_days = 0 # TODO: Integrate with leave management
+        
+        # Total days in month
+        total_days_in_month = len(month_days)
+        
+        # Absent = Total - Present - Holidays - WeeklyOffs - Leaves
+        # Ensure non-negative
+        non_working = calc_holidays + calc_weekly_offs + rollup.leave_days
+        rollup.absent_days = max(0, total_days_in_month - present_days - non_working)
+        rollup.lop_days = rollup.absent_days # Mapping absent to LOP for now
+        
+        # Total working days (expected) = Total - Holidays - WeeklyOffs
+        rollup.total_working_days = total_days_in_month - non_working
+        
+        count += 1
+    
+    db.session.commit()
+    return count
+
+@bp.post("/generate")
+@requires_perms("payroll.attendance.manage") # Assuming manage perm exists, or use appropriate one
+def generate_endpoint():
+    """
+    POST /api/v1/attendance-rollup/generate
+    Body: { "company_id": 1, "year": 2025, "month": 11 }
+    """
+    data = request.get_json() or {}
+    company_id = data.get("company_id")
+    year = data.get("year")
+    month = data.get("month")
+    
+    if not all([company_id, year, month]):
+        return _fail("company_id, year, and month are required", 400)
+        
+    try:
+        count = generate_rollups_for_period(int(company_id), int(year), int(month))
+        return _ok({"message": f"Generated rollups for {count} employees", "count": count})
+    except Exception as e:
+        db.session.rollback()
+        return _fail(f"Generation failed: {str(e)}", 500)
+

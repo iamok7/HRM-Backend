@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Payslip - {{ employee.name }} - {{ run.month }}/{{ run.year }}</title>
+    <style>
+        body { font-family: 'Helvetica', 'Arial', sans-serif; color: #333; font-size: 14px; line-height: 1.5; }
+        .container { width: 800px; margin: 0 auto; padding: 20px; border: 1px solid #ccc; }
+        .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        .header h1 { margin: 0; font-size: 24px; text-transform: uppercase; }
+        .header p { margin: 5px 0; }
+        .section { margin-bottom: 20px; }
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+        .row { display: flex; justify-content: space-between; margin-bottom: 5px; }
+        .label { font-weight: bold; color: #666; }
+        .value { font-weight: bold; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f9f9f9; text-transform: uppercase; font-size: 12px; }
+        .amount { text-align: right; }
+        .totals { margin-top: 20px; border-top: 2px solid #333; padding-top: 10px; }
+        .total-row { display: flex; justify-content: space-between; font-size: 16px; font-weight: bold; margin-bottom: 5px; }
+        .footer { margin-top: 40px; font-size: 12px; text-align: center; color: #999; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>{{ company.name }}</h1>
+            <p>Payslip for {{ run.month }}/{{ run.year }}</p>
+        </div>
+
+        <div class="section grid">
+            <div>
+                <div class="row"><span class="label">Employee Name:</span> <span class="value">{{ employee.name }}</span></div>
+                <div class="row"><span class="label">Employee Code:</span> <span class="value">{{ employee.code }}</span></div>
+                <div class="row"><span class="label">Department:</span> <span class="value">{{ employee.department }}</span></div>
+                <div class="row"><span class="label">Designation:</span> <span class="value">{{ employee.designation }}</span></div>
+            </div>
+            <div>
+                <div class="row"><span class="label">Bank Name:</span> <span class="value">{{ employee.bank_name or '-' }}</span></div>
+                <div class="row"><span class="label">Account No:</span> <span class="value">{{ employee.bank_account_number or '-' }}</span></div>
+                <div class="row"><span class="label">Days Worked:</span> <span class="value">{{ attendance.days_worked }}</span></div>
+                <div class="row"><span class="label">LOP Days:</span> <span class="value">{{ attendance.lop_days }}</span></div>
+            </div>
+        </div>
+
+        <div class="section">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Earnings</th>
+                        <th class="amount">Amount</th>
+                        <th>Deductions</th>
+                        <th class="amount">Amount</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% set max_rows = [earnings|length, deductions|length]|max %}
+                    {% for i in range(max_rows) %}
+                    <tr>
+                        <td>
+                            {% if i < earnings|length %}
+                                {{ earnings[i].name }}
+                            {% endif %}
+                        </td>
+                        <td class="amount">
+                            {% if i < earnings|length %}
+                                {{ "{:,.2f}".format(earnings[i].amount) }}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if i < deductions|length %}
+                                {{ deductions[i].name }}
+                            {% endif %}
+                        </td>
+                        <td class="amount">
+                            {% if i < deductions|length %}
+                                {{ "{:,.2f}".format(deductions[i].amount) }}
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    
+                    <!-- Totals Row -->
+                    <tr style="background-color: #f0f0f0; font-weight: bold;">
+                        <td>Total Earnings</td>
+                        <td class="amount">{{ "{:,.2f}".format(earnings_summary.gross_earnings) }}</td>
+                        <td>Total Deductions</td>
+                        <td class="amount">{{ "{:,.2f}".format(deductions_summary.total_deductions) }}</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="totals">
+            <div class="total-row">
+                <span>Net Pay:</span>
+                <span>{{ "{:,.2f}".format(totals.net_pay) }}</span>
+            </div>
+            <div style="text-align: right; font-size: 12px; color: #666;">
+                (Gross Pay: {{ "{:,.2f}".format(totals.gross_pay) }})
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>This is a computer-generated payslip and does not require a signature.</p>
+            <p>Generated on {{ run.processed_on }}</p>
+        </div>
+    </div>
+</body>
+</html>

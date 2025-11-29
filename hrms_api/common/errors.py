@@ -40,3 +40,16 @@ def _integrity(e: IntegrityError):
 @bp_errors.app_errorhandler(Exception)
 def _unhandled(e: Exception):
     return fail(message="Internal Server Error", status=500, detail=str(e))
+
+class APIError(Exception):
+    """Custom API Error class."""
+    def __init__(self, code, message, status_code=400, payload=None):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.status_code = status_code
+        self.payload = payload
+
+@bp_errors.app_errorhandler(APIError)
+def _api_error(e: APIError):
+    return fail(message=e.message, status=e.status_code, code=e.code, detail=e.payload)

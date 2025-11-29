@@ -1,0 +1,9 @@
+A proper Loans & Advances module with outstanding + auto EMI.
+
+Net pay calculation that actually subtracts statutory + loan deductions (right now net = gross).
+
+A clean, single payslip API for one employee + period.
+
+Simple “statutory toggles” API on top of StatConfig.
+
+Pay runs restricted by location/site and dashboards for multi-site summary.

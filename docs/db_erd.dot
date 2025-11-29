@@ -1,0 +1,80 @@
+digraph HRMS {
+  rankdir=LR;
+  node [shape=box, fontsize=10];
+
+  // Core master data
+  COMPANIES; LOCATIONS; DEPARTMENTS; DESIGNATIONS; GRADES; COST_CENTERS;
+  USERS; ROLES; PERMISSIONS; USER_ROLES; ROLE_PERMISSIONS;
+
+  // Employees
+  EMPLOYEES;
+
+  // Payroll
+  PAY_CYCLES; PAY_POLICIES; TRADE_CATEGORIES; SALARY_COMPONENTS; EMPLOYEE_SALARY;
+  EMPLOYEE_PAY_PROFILE; PAY_RUNS; PAY_RUN_ITEMS; PAY_RUN_ITEM_LINES; ADJUSTMENTS; STAT_CONFIGS; COMPLIANCE_EVENTS;
+
+  // Attendance & Leave
+  ATTENDANCE_PUNCHES; MISSED_PUNCH_REQUESTS; SHIFTS; EMPLOYEE_SHIFT_ASSIGNMENTS; HOLIDAYS; WEEKLY_OFF_RULES;
+  LEAVE_TYPES; LEAVE_REQUESTS; LEAVE_BALANCES;
+
+  // Security
+  USERS -> USER_ROLES [label="1..* user_id"]; ROLES -> USER_ROLES [label="1..* role_id"]; 
+  ROLES -> ROLE_PERMISSIONS [label="1..* role_id"]; PERMISSIONS -> ROLE_PERMISSIONS [label="1..* permission_id"]; 
+
+  // Master relationships
+  COMPANIES -> LOCATIONS [label="1..* company_id"]; 
+  COMPANIES -> DEPARTMENTS [label="1..* company_id"]; 
+  DEPARTMENTS -> DESIGNATIONS [label="1..* department_id"]; 
+
+  // Employee relationships
+  COMPANIES -> EMPLOYEES [label="1..* company_id"]; 
+  LOCATIONS -> EMPLOYEES [label="1..* location_id"]; 
+  DEPARTMENTS -> EMPLOYEES [label="1..* department_id"]; 
+  DESIGNATIONS -> EMPLOYEES [label="1..* designation_id"]; 
+  GRADES -> EMPLOYEES [label="1..* grade_id"]; 
+  COST_CENTERS -> EMPLOYEES [label="1..* cost_center_id"]; 
+
+  // Payroll setup
+  COMPANIES -> PAY_CYCLES [label="1..* company_id"]; 
+  COMPANIES -> PAY_POLICIES [label="1..* company_id"]; 
+  TRADE_CATEGORIES -> EMPLOYEE_PAY_PROFILE [label="1..* category_id"]; 
+  EMPLOYEES -> EMPLOYEE_PAY_PROFILE [label="1..* employee_id"]; 
+  EMPLOYEES -> EMPLOYEE_SALARY [label="1..* employee_id"]; 
+  SALARY_COMPONENTS -> EMPLOYEE_SALARY [label="1..* component_id"]; 
+
+  // Runs
+  COMPANIES -> PAY_RUNS [label="1..* company_id"]; 
+  PAY_CYCLES -> PAY_RUNS [label="0..* cycle_id"]; 
+  PAY_RUNS -> PAY_RUNS [label="retro_of_id (self)"]; 
+  PAY_RUNS -> PAY_RUN_ITEMS [label="1..* pay_run_id"]; 
+  EMPLOYEES -> PAY_RUN_ITEMS [label="1..* employee_id"]; 
+  PAY_RUN_ITEMS -> PAY_RUN_ITEM_LINES [label="1..* item_id"]; 
+  SALARY_COMPONENTS -> PAY_RUN_ITEM_LINES [label="1..* component_id"]; 
+
+  // Compliance & config
+  COMPANIES -> STAT_CONFIGS [label="0..* company_id"]; 
+  USERS -> COMPLIANCE_EVENTS [label="0..* submitted_by"]; 
+
+  // Adjustments
+  EMPLOYEES -> ADJUSTMENTS [label="1..* employee_id"]; 
+  USERS -> ADJUSTMENTS [label="0..* created_by"]; 
+
+  // Attendance
+  EMPLOYEES -> ATTENDANCE_PUNCHES [label="1..* employee_id"]; 
+  EMPLOYEES -> MISSED_PUNCH_REQUESTS [label="0..* employee_id"]; 
+  USERS -> MISSED_PUNCH_REQUESTS [label="0..* approved_by"]; 
+  COMPANIES -> SHIFTS [label="1..* company_id"]; 
+  EMPLOYEES -> EMPLOYEE_SHIFT_ASSIGNMENTS [label="1..* employee_id"]; 
+  SHIFTS -> EMPLOYEE_SHIFT_ASSIGNMENTS [label="1..* shift_id"]; 
+  COMPANIES -> HOLIDAYS [label="1..* company_id"]; 
+  LOCATIONS -> HOLIDAYS [label="0..* location_id"]; 
+  COMPANIES -> WEEKLY_OFF_RULES [label="1..* company_id"]; 
+  LOCATIONS -> WEEKLY_OFF_RULES [label="0..* location_id"]; 
+
+  // Leave
+  LEAVE_TYPES -> LEAVE_REQUESTS [label="1..* leave_type_id"]; 
+  EMPLOYEES -> LEAVE_REQUESTS [label="1..* employee_id"]; 
+  LEAVE_TYPES -> LEAVE_BALANCES [label="1..* leave_type_id"]; 
+  EMPLOYEES -> LEAVE_BALANCES [label="1..* employee_id"]; 
+}
+

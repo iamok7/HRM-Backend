@@ -1,0 +1,75 @@
+erDiagram
+  USERS ||--o{ USER_ROLES : assigns
+  ROLES ||--o{ USER_ROLES : has
+  ROLES ||--o{ ROLE_PERMISSIONS : grants
+  PERMISSIONS ||--o{ ROLE_PERMISSIONS : mapped
+
+  COMPANIES ||--o{ LOCATIONS : has
+  COMPANIES ||--o{ DEPARTMENTS : has
+  COMPANIES ||--o{ PAY_CYCLES : has
+  COMPANIES ||--o{ PAY_POLICIES : has
+  COMPANIES ||--o{ HOLIDAYS : has
+  COMPANIES ||--o{ WEEKLY_OFF_RULES : has
+  COMPANIES ||--o{ SHIFTS : has
+  COMPANIES ||--o{ STAT_CONFIGS : optional
+
+  DEPARTMENTS ||--o{ DESIGNATIONS : has
+
+  EMPLOYEES }o--|| COMPANIES : belongs_to
+  EMPLOYEES }o--|| LOCATIONS : at
+  EMPLOYEES }o--|| DEPARTMENTS : in
+  EMPLOYEES }o--|| DESIGNATIONS : titled
+  EMPLOYEES }o--|| GRADES : level
+  EMPLOYEES }o--|| COST_CENTERS : costed_to
+
+  EMPLOYEES ||--o{ ATTENDANCE_PUNCHES : has
+  EMPLOYEES ||--o{ MISSED_PUNCH_REQUESTS : may_raise
+  USERS ||--o{ MISSED_PUNCH_REQUESTS : approves
+
+  SHIFTS ||--o{ EMPLOYEE_SHIFT_ASSIGNMENTS : target
+  EMPLOYEES ||--o{ EMPLOYEE_SHIFT_ASSIGNMENTS : subject
+
+  LEAVE_TYPES ||--o{ LEAVE_REQUESTS : used_by
+  EMPLOYEES ||--o{ LEAVE_REQUESTS : raises
+  EMPLOYEES ||--o{ LEAVE_BALANCES : has
+  LEAVE_TYPES ||--o{ LEAVE_BALANCES : for
+
+  TRADE_CATEGORIES ||--o{ EMPLOYEE_PAY_PROFILE : used_by
+  EMPLOYEES ||--o{ EMPLOYEE_PAY_PROFILE : has
+
+  SALARY_COMPONENTS ||--o{ EMPLOYEE_SALARY : mapped
+  EMPLOYEES ||--o{ EMPLOYEE_SALARY : has
+
+  PAY_RUNS ||--o{ PAY_RUN_ITEMS : has
+  PAY_RUN_ITEMS }o--|| EMPLOYEES : for
+  SALARY_COMPONENTS ||--o{ PAY_RUN_ITEM_LINES : component
+  PAY_RUN_ITEMS ||--o{ PAY_RUN_ITEM_LINES : detail
+  COMPANIES ||--o{ PAY_RUNS : has
+  PAY_CYCLES ||--o{ PAY_RUNS : scheduled_in
+  PAY_RUNS ||--o{ PAY_RUNS : retro_of
+
+  EMPLOYEES ||--o{ ADJUSTMENTS : has
+  USERS ||--o{ ADJUSTMENTS : created_by
+
+  USERS ||--o{ COMPLIANCE_EVENTS : submitted_by
+
+%% Table aliases (names as used in codebase)
+  PAY_RUNS {
+    string status
+    date period_start
+    date period_end
+  }
+  PAY_RUN_ITEMS {
+    numeric gross
+    numeric net
+  }
+  ATTENDANCE_PUNCHES {
+    datetime ts
+    string kind
+  }
+  STAT_CONFIGS {
+    string scope
+    json value_json
+    date effective_from
+    date effective_to
+  }

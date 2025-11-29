@@ -1,0 +1,247 @@
+{
+  "info": {
+    "name": "V6_payroll_compliences_paycycles",
+    "_postman_id": "f2ee3c2e-9e6d-4f3a-9d2e-hrms-v6-compl",
+    "description": "Unified compliance V2 flow: login → pay-cycle → pay-run → stat-configs (PF/ESI/PT V2) → preview → apply → introspect.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth / Login (sets {{accessToken}})",
+      "request": {
+        "method": "POST",
+        "header": [
+          {"key":"Content-Type","value":"application/json"}
+        ],
+        "url": {"raw":"{{baseUrl}}/api/v1/auth/login","host":["{{baseUrl}}"],"path":["api","v1","auth","login"]},
+        "body": {
+          "mode": "raw",
+          "raw": "{\"username\":\"{{username}}\",\"password\":\"{{password}}\"}"
+        }
+      },
+      "response": [],
+      "event": [
+        {
+          "listen":"test",
+          "script":{
+            "exec":[
+              "let json={};",
+              "try{json=pm.response.json()}catch(e){}",
+              "const tok=json.access||json.data?.access;",
+              "if(tok){ pm.environment.set('accessToken', tok); pm.collectionVariables.set('accessToken', tok); }",
+              "pm.test('Got access token',()=>pm.expect(!!tok).to.be.true);"
+            ],
+            "type":"text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Login (quick)",
+      "request": {
+        "method": "POST",
+        "header": [{"key":"Content-Type","value":"application/json"}],
+        "url": {"raw":"{{baseUrl}}/api/v1/auth/login","host":["{{baseUrl}}"],"path":["api","v1","auth","login"]},
+        "body": {"mode":"raw","raw":"{\"username\":\"{{username}}\",\"password\":\"{{password}}\"}"}
+      }
+    },
+
+    {
+      "name": "Pay Cycles / Create",
+      "request": {
+        "auth": {"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method": "POST",
+        "header": [{"key":"Content-Type","value":"application/json"}],
+        "url": {"raw":"{{baseUrl}}/api/v1/pay-cycles","host":["{{baseUrl}}"],"path":["api","v1","pay-cycles"]},
+        "body": {
+          "mode":"raw",
+          "raw":"{\n  \"company_id\": {{companyId}},\n  \"name\": \"Monthly Default\",\n  \"frequency\": \"monthly\",\n  \"period_anchor_day\": 1,\n  \"active\": true,\n  \"priority\": 100,\n  \"effective_from\": \"2025-04-01\"\n}"
+        }
+      },
+      "event":[
+        {"listen":"test","script":{"type":"text/javascript","exec":[
+          "let id=pm.response.json()?.data?.id;",
+          "if(id){ pm.environment.set('payCycleId', id); pm.collectionVariables.set('payCycleId', id); }",
+          "pm.test('Pay cycle created',()=>pm.expect(!!id).to.be.true);"
+        ]}}
+      ]
+    },
+    {
+      "name": "Pay Cycles / List (by company)",
+      "request": {
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"GET",
+        "url":{"raw":"{{baseUrl}}/api/v1/pay-cycles?company_id={{companyId}}","host":["{{baseUrl}}"],"path":["api","v1","pay-cycles"],"query":[{"key":"company_id","value":"{{companyId}}"}]}
+      }
+    },
+    {
+      "name": "Pay Cycles / Get by ID",
+      "request": {
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"GET",
+        "url":{"raw":"{{baseUrl}}/api/v1/pay-cycles/{{payCycleId}}","host":["{{baseUrl}}"],"path":["api","v1","pay-cycles","{{payCycleId}}"]}
+      }
+    },
+
+    {
+      "name": "Stat Config / Create PF (company V2)",
+      "request": {
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"POST",
+        "header":[{"key":"Content-Type","value":"application/json"}],
+        "url":{"raw":"{{baseUrl}}/api/v1/compliance/stat-config","host":["{{baseUrl}}"],"path":["api","v1","compliance","stat-config"]},
+        "body":{"mode":"raw","raw":"{\n  \"type\":\"PF\",\n  \"scope\":\"company\",\n  \"company_id\": {{companyId}},\n  \"code\":\"STATCFG_V2_PF_C{{companyId}}\",\n  \"effective_from\":\"2025-04-01\",\n  \"priority\":100,\n  \"value\":{\n    \"base_tag\":\"BASIC_DA\",\n    \"emp_rate\":0.12,\n    \"er_epf_rate\":0.0367,\n    \"er_eps_rate\":0.0833\n  }\n}"}
+      }
+    },
+    {
+      "name": "Stat Config / Create ESI (company V2)",
+      "request": {
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"POST",
+        "header":[{"key":"Content-Type","value":"application/json"}],
+        "url":{"raw":"{{baseUrl}}/api/v1/compliance/stat-config","host":["{{baseUrl}}"],"path":["api","v1","compliance","stat-config"]},
+        "body":{"mode":"raw","raw":"{\n  \"type\":\"ESI\",\n  \"scope\":\"company\",\n  \"company_id\": {{companyId}},\n  \"code\":\"STATCFG_V2_ESI_C{{companyId}}\",\n  \"effective_from\":\"2025-04-01\",\n  \"priority\":100,\n  \"value\":{\n    \"emp_rate\":0.0075,\n    \"er_rate\":0.0325,\n    \"threshold\":21000,\n    \"entry_rule\":\"period_locking\"\n  }\n}"}
+      }
+    },
+    {
+      "name": "Stat Config / Create PT (company V2 – {{state}})",
+      "request": {
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"POST",
+        "header":[{"key":"Content-Type","value":"application/json"}],
+        "url":{"raw":"{{baseUrl}}/api/v1/compliance/stat-config","host":["{{baseUrl}}"],"path":["api","v1","compliance","stat-config"]},
+        "body":{"mode":"raw","raw":"{\n  \"type\":\"PT\",\n  \"scope\":\"company\",\n  \"company_id\": {{companyId}},\n  \"code\":\"STATCFG_V2_PT_C{{companyId}}\",\n  \"effective_from\":\"2025-04-01\",\n  \"priority\":100,\n  \"value\":{\n    \"slabs\":[\n      {\"upto\":7500,  \"pt\":0},\n      {\"upto\":10000, \"pt\":175},\n      {\"upto\":9999999, \"pt\":200}\n    ]\n  }\n}"}
+      }
+    },
+    {
+      "name": "Stat Config / List",
+      "request": {
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"GET",
+        "url":{"raw":"{{baseUrl}}/api/v1/compliance/stat-config","host":["{{baseUrl}}"],"path":["api","v1","compliance","stat-config"]}
+      }
+    },
+
+    {
+      "name": "Pay Runs / Create (auto-resolve cycle)",
+      "request": {
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"POST",
+        "header":[{"key":"Content-Type","value":"application/json"}],
+        "url":{"raw":"{{baseUrl}}/api/v1/pay-runs","host":["{{baseUrl}}"],"path":["api","v1","pay-runs"]},
+        "body":{"mode":"raw","raw":"{ \"company_id\": {{companyId}} }"}
+      },
+      "event":[
+        {"listen":"test","script":{"type":"text/javascript","exec":[
+          "const rid=pm.response.json()?.data?.id;",
+          "if(rid){ pm.environment.set('runId', rid); pm.collectionVariables.set('runId', rid); }",
+          "pm.test('Run created',()=>pm.expect(!!rid).to.be.true);"
+        ]}}
+      ]
+    },
+    {
+      "name":"Pay Runs / Get",
+      "request":{
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"GET",
+        "url":{"raw":"{{baseUrl}}/api/v1/pay-runs/{{runId}}","host":["{{baseUrl}}"],"path":["api","v1","pay-runs","{{runId}}"]}
+      }
+    },
+    {
+      "name":"Pay Runs / Calculate (populate items)",
+      "request":{
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"POST",
+        "url":{"raw":"{{baseUrl}}/api/v1/pay-runs/{{runId}}/calculate","host":["{{baseUrl}}"],"path":["api","v1","pay-runs","{{runId}}","calculate"]}
+      }
+    },
+    {
+      "name":"Pay Runs / List Run Items",
+      "request":{
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"GET",
+        "url":{"raw":"{{baseUrl}}/api/v1/pay-runs/{{runId}}/items","host":["{{baseUrl}}"],"path":["api","v1","pay-runs","{{runId}}","items"]}
+      }
+    },
+    {
+      "name":"Pay Runs / Approve (optional)",
+      "request":{
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"POST",
+        "url":{"raw":"{{baseUrl}}/api/v1/pay-runs/{{runId}}/approve","host":["{{baseUrl}}"],"path":["api","v1","pay-runs","{{runId}}","approve"]}
+      }
+    },
+    {
+      "name":"Pay Runs / Lock (optional)",
+      "request":{
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"POST",
+        "url":{"raw":"{{baseUrl}}/api/v1/pay-runs/{{runId}}/lock","host":["{{baseUrl}}"],"path":["api","v1","pay-runs","{{runId}}","lock"]}
+      }
+    },
+    {
+      "name":"Pay Runs / Unlock (if needed)",
+      "request":{
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"POST",
+        "url":{"raw":"{{baseUrl}}/api/v1/pay-runs/{{runId}}/unlock","host":["{{baseUrl}}"],"path":["api","v1","pay-runs","{{runId}}","unlock"]}
+      }
+    },
+
+    {
+      "name":"Compliance — Preview for Run",
+      "request":{
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"GET",
+        "url":{
+          "raw":"{{baseUrl}}/api/v1/compliance/preview?company_id={{companyId}}&state={{state}}&run_id={{runId}}",
+          "host":["{{baseUrl}}"],
+          "path":["api","v1","compliance","preview"],
+          "query":[
+            {"key":"company_id","value":"{{companyId}}"},
+            {"key":"state","value":"{{state}}"},
+            {"key":"run_id","value":"{{runId}}"}
+          ]
+        }
+      }
+    },
+    {
+      "name":"Compliance — Apply to Run",
+      "request":{
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"POST",
+        "header":[{"key":"Content-Type","value":"application/json"}],
+        "url":{"raw":"{{baseUrl}}/api/v1/compliance/apply","host":["{{baseUrl}}"],"path":["api","v1","compliance","apply"]},
+        "body":{"mode":"raw","raw":"{\n  \"company_id\": {{companyId}},\n  \"state\": \"{{state}}\",\n  \"run_id\": {{runId}},\n  \"types\": [\"PF\",\"ESI\",\"PT\"]\n}"}
+      }
+    },
+    {
+      "name":"Compliance — _introspect (debug)",
+      "request":{
+        "auth":{"type":"bearer","bearer":[{"key":"token","value":"{{accessToken}}","type":"string"}]},
+        "method":"GET",
+        "url":{
+          "raw":"{{baseUrl}}/api/v1/compliance/_introspect?company_id={{companyId}}&state={{state}}&as_of={{asOf}}",
+          "host":["{{baseUrl}}"],
+          "path":["api","v1","compliance","_introspect"],
+          "query":[
+            {"key":"company_id","value":"{{companyId}}"},
+            {"key":"state","value":"{{state}}"},
+            {"key":"as_of","value":"{{asOf}}"}
+          ]
+        }
+      }
+    }
+  ],
+  "variable":[
+    {"key":"baseUrl","value":"http://127.0.0.1:5000"},
+    {"key":"username","value":"ok"},
+    {"key":"password","value":"4445"},
+    {"key":"companyId","value":"12"},
+    {"key":"state","value":"MH"},
+    {"key":"asOf","value":"2025-08-31"},
+    {"key":"accessToken","value":""},
+    {"key":"payCycleId","value":""},
+    {"key":"runId","value":""}
+  ]
+}

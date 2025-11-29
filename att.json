@@ -1,0 +1,278 @@
+{
+  "info": {
+    "_postman_id": "a8a0f1c6-hrms-collection-autogen",
+    "name": "HRMS – Payroll, Compliance & Attendance (Auto Auth)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "End-to-end API collection for Payroll Runs, Compliance (PF/ESI/PT/LWF), Adjustments, and Attendance (rollup + punches). Includes collection-level auto login/refresh so individual requests don’t need separate auth setup."
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:5000" },
+    { "key": "email", "value": "admin@demo.local" },
+    { "key": "password", "value": "4445" },
+    { "key": "access", "value": "" },
+    { "key": "refresh", "value": "" },
+    { "key": "token", "value": "" },
+    { "key": "runId", "value": "1" },
+    { "key": "configId", "value": "1" },
+    { "key": "adjId", "value": "1" },
+    { "key": "punchId", "value": "1" }
+  ],
+  "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{access}}", "type": "string" } ] },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// ===== Auto Login / Refresh (collection-level) =====",
+          "const VAR = pm.collectionVariables;",
+          "function b64urlDecode(seg){ try{ return JSON.parse(atob(seg.replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return null;} }",
+          "function isExpired(jwt){ if(!jwt) return true; const p=jwt.split('.'); if(p.length!==3) return true; const pl=b64urlDecode(p[1]); if(!pl||!pl.exp) return true; const now=Math.floor(Date.now()/1000); return (pl.exp-30)<=now; }",
+          "const needAcc = !VAR.get('access') || isExpired(VAR.get('access'));",
+          "if(!needAcc){ VAR.set('token', VAR.get('access')); return; }",
+          "// prevent loops",
+          "if(VAR.get('__retrying')==='1'){ VAR.unset('__retrying'); return; }",
+          "VAR.set('__retrying','1');",
+          "function replay(){ pm.setNextRequest(pm.info.requestName); }",
+          "function saveTokens(res){ let j={}; try{j=res.json();}catch(e){};",
+          "  const acc=j.access||j.data?.access||j.access_token||j.data?.access_token||j.token||j.data?.token;",
+          "  const ref=j.refresh||j.data?.refresh||j.refresh_token||j.data?.refresh_token;",
+          "  if(acc){ VAR.set('access', acc); VAR.set('token', acc);} if(ref){ VAR.set('refresh', ref);} return !!acc; }",
+          "function doLogin(cb){ pm.sendRequest({",
+          "  url: `${VAR.get('baseUrl')}/api/v1/auth/login`, method:'POST',",
+          "  header:{'Content-Type':'application/json'},",
+          "  body:{mode:'raw', raw: JSON.stringify({ email: VAR.get('email'), password: VAR.get('password') })}",
+          "}, (err,res)=> cb(!err && res && saveTokens(res))); }",
+          "function doRefresh(cb){ const ref=VAR.get('refresh'); if(!ref){ cb(false); return; } pm.sendRequest({",
+          "  url:`${VAR.get('baseUrl')}/api/v1/auth/refresh`, method:'POST',",
+          "  header:{'Content-Type':'application/json','Authorization':`Bearer ${ref}`},",
+          "  body:{mode:'raw', raw:'{}'}",
+          "}, (err,res)=> cb(!err && res && saveTokens(res))); }",
+          "doRefresh(ok=>{ if(ok){ replay(); return; } doLogin(ok2=>{ if(ok2){ replay(); } else { VAR.unset('__retrying'); } }); });"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Clear retry flag; capture any token pair returned by any endpoint",
+          "pm.collectionVariables.unset('__retrying');",
+          "try{ const j=pm.response.json();",
+          "  const acc=j.access||j.data?.access||j.access_token||j.data?.access_token||j.token||j.data?.token;",
+          "  const ref=j.refresh||j.data?.refresh||j.refresh_token||j.data?.refresh_token;",
+          "  if(acc){ pm.collectionVariables.set('access', acc); pm.collectionVariables.set('token', acc);} if(ref){ pm.collectionVariables.set('refresh', ref);} }catch(e){}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "0) Auth & Health",
+      "item": [
+        {
+          "name": "Auth • Login (admin)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/auth/login",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}" },
+            "auth": { "type": "noauth" }
+          }
+        },
+        {
+          "name": "Auth • Refresh (Bearer refresh)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{refresh}}" }
+            ],
+            "url": "{{baseUrl}}/api/v1/auth/refresh",
+            "body": { "mode": "raw", "raw": "{}" },
+            "auth": { "type": "noauth" }
+          }
+        },
+        { "name": "Auth • Me", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/auth/me" } },
+        { "name": "Healthcheck", "request": { "method": "GET", "url": "{{baseUrl}}/api/healthz" } }
+      ]
+    },
+    {
+      "name": "1) Pay Runs",
+      "item": [
+        {
+          "name": "Pay Runs • Create (draft)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/pay-runs",
+            "body": { "mode": "raw", "raw": "{\n  \"company_id\": 1,\n  \"pay_cycle_id\": 1,\n  \"period_start\": \"2025-10-01\",\n  \"period_end\": \"2025-10-31\",\n  \"note\": \"Oct payroll\"\n}" }
+          }
+        },
+        { "name": "Pay Runs • List", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/pay-runs?status=&company_id=&pay_cycle_id=&from=&to=&page=1&size=20" } },
+        { "name": "Pay Runs • Get by ID", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/pay-runs/{{runId}}" } },
+        {
+          "name": "Pay Runs • Patch (period/note) [draft only]",
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/pay-runs/{{runId}}",
+            "body": { "mode": "raw", "raw": "{\n  \"note\": \"Updated note\"\n}" }
+          }
+        },
+        { "name": "Pay Runs • Delete [draft only]", "request": { "method": "DELETE", "url": "{{baseUrl}}/api/v1/pay-runs/{{runId}}" } },
+        { "name": "Pay Runs • Calculate (build items)", "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/pay-runs/{{runId}}/calculate" } },
+        { "name": "Pay Runs • Approve", "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/pay-runs/{{runId}}/approve" } },
+        { "name": "Pay Runs • Lock", "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/pay-runs/{{runId}}/lock" } },
+        { "name": "Pay Runs • Unlock", "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/pay-runs/{{runId}}/unlock" } },
+        { "name": "Pay Runs • List Items", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/pay-runs/{{runId}}/items?page=1&size=50&employee_id=" } }
+      ]
+    },
+    {
+      "name": "2) Compliance (PF/ESI/PT/LWF)",
+      "item": [
+        { "name": "Config • Introspect", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/compliance/_introspect" } },
+        { "name": "Config • List", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/compliance/stat-config?code=&scope=&active_on=" } },
+        {
+          "name": "Config • Create (PF – employee)",
+          "request": { "method": "POST", "header": [ {"key": "Content-Type", "value": "application/json"} ], "url": "{{baseUrl}}/api/v1/compliance/stat-config", "body": {"mode": "raw", "raw": "{\n  \"code\": \"PF_RATE_EMP\",\n  \"scope\": \"IN\",\n  \"value\": {\"rate\": 0.12, \"wage_cap\": 15000, \"wage_tag\": \"BASIC\"},\n  \"effective_from\": \"2025-01-01\"\n}" } }
+        },
+        {
+          "name": "Config • Create (PF – employer)",
+          "request": { "method": "POST", "header": [ {"key": "Content-Type", "value": "application/json"} ], "url": "{{baseUrl}}/api/v1/compliance/stat-config", "body": {"mode": "raw", "raw": "{\n  \"code\": \"PF_RATE_ER\",\n  \"scope\": \"IN\",\n  \"value\": {\"rate\": 0.12},\n  \"effective_from\": \"2025-01-01\"\n}" } }
+        },
+        {
+          "name": "Config • Create (ESI)",
+          "request": { "method": "POST", "header": [ {"key": "Content-Type", "value": "application/json"} ], "url": "{{baseUrl}}/api/v1/compliance/stat-config", "body": {"mode": "raw", "raw": "{\n  \"code\": \"ESI_RATE\",\n  \"scope\": \"IN\",\n  \"value\": {\"emp\": 0.0075, \"er\": 0.0325, \"threshold\": 21000},\n  \"effective_from\": \"2025-01-01\"\n}" } }
+        },
+        {
+          "name": "Config • Create (PT – Maharashtra slabs)",
+          "request": { "method": "POST", "header": [ {"key": "Content-Type", "value": "application/json"} ], "url": "{{baseUrl}}/api/v1/compliance/stat-config", "body": {"mode": "raw", "raw": "{\n  \"code\": \"MH_PT_SLABS\",\n  \"scope\": \"MH\",\n  \"value\": [\n    {\"min\": 0, \"max\": 10000, \"amount\": 0},\n    {\"min\": 10001, \"max\": 9999999, \"amount\": 200}\n  ],\n  \"effective_from\": \"2025-01-01\"\n}" } }
+        },
+        {
+          "name": "Config • Create (LWF – Maharashtra)",
+          "request": { "method": "POST", "header": [ {"key": "Content-Type", "value": "application/json"} ], "url": "{{baseUrl}}/api/v1/compliance/stat-config", "body": {"mode": "raw", "raw": "{\n  \"code\": \"LWF_MH\",\n  \"scope\": \"MH\",\n  \"value\": [\n    {\"month\": 6,  \"emp\": 12, \"er\": 36},\n    {\"month\": 12, \"emp\": 12, \"er\": 36}\n  ],\n  \"effective_from\": \"2025-01-01\"\n}" } }
+        },
+        {
+          "name": "Config • Close & New Version",
+          "request": {
+            "method": "PUT",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/compliance/stat-config/{{configId}}/close",
+            "body": { "mode": "raw", "raw": "{\n  \"new_from\": \"2026-01-01\",\n  \"new_value\": {\"rate\": 0.125, \"wage_cap\": 15000, \"wage_tag\": \"BASIC\"},\n  \"new_is_active\": true\n}" }
+          }
+        },
+        { "name": "Compliance • Preview for Run", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/compliance/preview?run_id={{runId}}&state=MH" } },
+        { "name": "Compliance • Apply to Run", "request": { "method": "POST", "header": [ {"key":"Content-Type","value":"application/json"} ], "url": "{{baseUrl}}/api/v1/compliance/apply", "body": {"mode": "raw", "raw": "{\n  \"run_id\": {{runId}},\n  \"state\": \"MH\"\n}" } } }
+      ]
+    },
+    {
+      "name": "3) Adjustments",
+      "item": [
+        {
+          "name": "Adjust • Create (earning)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/adjustments",
+            "body": { "mode": "raw", "raw": "{\n  \"employee_id\": 1,\n  \"code\": \"BONUS_DIWALI\",\n  \"kind\": \"earning\",\n  \"adj_date\": \"2025-10-20\",\n  \"amount\": 5000,\n  \"narration\": \"Festival bonus\",\n  \"status\": \"draft\"\n}" }
+          }
+        },
+        {
+          "name": "Adjust • Create (deduction)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/adjustments",
+            "body": { "mode": "raw", "raw": "{\n  \"employee_id\": 1,\n  \"code\": \"ADV_RECOVERY\",\n  \"kind\": \"deduction\",\n  \"adj_date\": \"2025-10-25\",\n  \"amount\": 1500,\n  \"narration\": \"Advance recovery\",\n  \"status\": \"draft\"\n}" }
+          }
+        },
+        { "name": "Adjust • List", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/adjustments?employee_id=&status=&code=&from=&to=" } },
+        {
+          "name": "Adjust • Patch",
+          "request": {
+            "method": "PATCH",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/adjustments/{{adjId}}",
+            "body": { "mode": "raw", "raw": "{\n  \"narration\": \"Updated note\"\n}" }
+          }
+        },
+        { "name": "Adjust • Approve", "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/adjustments/{{adjId}}/approve" } },
+        { "name": "Adjust • Void", "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/adjustments/{{adjId}}/void" } },
+        { "name": "Adjust • Delete", "request": { "method": "DELETE", "url": "{{baseUrl}}/api/v1/adjustments/{{adjId}}" } },
+        {
+          "name": "Adjust • Apply to Run",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/adjustments/apply",
+            "body": { "mode": "raw", "raw": "{\n  \"run_id\": {{runId}}\n}" }
+          }
+        }
+      ]
+    },
+    {
+      "name": "4) Attendance Rollup",
+      "item": [
+        { "name": "Rollup • Capability", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/attendance-rollup/_capability" } },
+        { "name": "Rollup • Period (all emps)", "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/attendance-rollup?from=2025-10-01&to=2025-10-31&company_id=&employee_id=" } }
+      ]
+    },
+    {
+      "name": "5) Attendance Punches",
+      "item": [
+        {
+          "name": "Punches • Import (JSON, commit)",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/attendance/punches/import?mode=commit&on_duplicate=skip&recompute=1",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rows\": [\n    {\n      \"employee_code\": \"E-0001\",\n      \"ts\": \"2025-10-10 09:01\",\n      \"kind\": \"in\",\n      \"source\": \"device\",\n      \"note\": \"\"\n    },\n    {\n      \"employee_code\": \"E-0001\",\n      \"ts\": \"2025-10-10 18:04\",\n      \"kind\": \"out\",\n      \"source\": \"device\",\n      \"note\": \"\"\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Punches • List",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/attendance/punches?employee_id=&from=&to=&kind=&page=1&size=20" }
+        },
+        {
+          "name": "Punches • Create",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/attendance/punches",
+            "body": { "mode": "raw", "raw": "{\n  \"employee_id\": 1,\n  \"ts\": \"2025-10-12 09:00\",\n  \"kind\": \"in\",\n  \"source\": \"manual\",\n  \"note\": \"late entry\"\n}" }
+          }
+        },
+        { "name": "Punches • Delete", "request": { "method": "DELETE", "url": "{{baseUrl}}/api/v1/attendance/punches/{{punchId}}" } }
+      ]
+    }
+  ]
+  ,
+    {
+      "name": "6) RBAC – Admin",
+      "item": [
+        {
+          "name": "RBAC • Ensure Defaults (roles/perms)",
+          "request": { "method": "POST", "url": "{{baseUrl}}/api/v1/rbac/ensure-defaults" }
+        },
+        {
+          "name": "RBAC • User Inspect",
+          "request": { "method": "GET", "url": "{{baseUrl}}/api/v1/rbac/users/inspect?email={{email}}" }
+        },
+        {
+          "name": "RBAC • Reset User Password",
+          "request": {
+            "method": "POST",
+            "header": [ { "key": "Content-Type", "value": "application/json" } ],
+            "url": "{{baseUrl}}/api/v1/rbac/users/reset-password",
+            "body": { "mode": "raw", "raw": "{\n  \"email\": \"emp1@demo.local\",\n  \"password\": \"NewStrong#123\"\n}" }
+          }
+        }
+      ]
+    }
+  ]
+}

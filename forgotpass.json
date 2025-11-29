@@ -1,0 +1,83 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-reset-pass-collection",
+    "name": "HRMS – Reset User Password (HR/Admin)",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "description": "Single endpoint to reset a user's password by HR/Admin. Collection includes auto-login/refresh so the request runs with a valid Bearer token."
+  },
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:5000" },
+    { "key": "email", "value": "admin@demo.local" },
+    { "key": "password", "value": "4445" },
+    { "key": "access", "value": "" },
+    { "key": "refresh", "value": "" },
+    { "key": "token", "value": "" },
+    { "key": "targetEmail", "value": "emp1@demo.local" },
+    { "key": "newPassword", "value": "NewStrong#123" }
+  ],
+  "auth": { "type": "bearer", "bearer": [ { "key": "token", "value": "{{access}}", "type": "string" } ] },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// ===== Auto Login / Refresh (collection-level) =====",
+          "const VAR = pm.collectionVariables;",
+          "function b64urlDecode(seg){ try{ return JSON.parse(atob(seg.replace(/-/g,'+').replace(/_/g,'/')));}catch(e){return null;} }",
+          "function isExpired(jwt){ if(!jwt) return true; const p=jwt.split('.'); if(p.length!==3) return true; const pl=b64urlDecode(p[1]); if(!pl||!pl.exp) return true; const now=Math.floor(Date.now()/1000); return (pl.exp-30)<=now; }",
+          "const needAcc = !VAR.get('access') || isExpired(VAR.get('access'));",
+          "if(!needAcc){ VAR.set('token', VAR.get('access')); return; }",
+          "// prevent loops",
+          "if(VAR.get('__retrying')==='1'){ VAR.unset('__retrying'); return; }",
+          "VAR.set('__retrying','1');",
+          "function replay(){ pm.setNextRequest(pm.info.requestName); }",
+          "function saveTokens(res){ let j={}; try{j=res.json();}catch(e){};",
+          "  const acc=j.access||j.data?.access||j.access_token||j.data?.access_token||j.token||j.data?.token;",
+          "  const ref=j.refresh||j.data?.refresh||j.refresh_token||j.data?.refresh_token;",
+          "  if(acc){ VAR.set('access', acc); VAR.set('token', acc);} if(ref){ VAR.set('refresh', ref);} return !!acc; }",
+          "function doLogin(cb){ pm.sendRequest({",
+          "  url: `${VAR.get('baseUrl')}/api/v1/auth/login`, method:'POST',",
+          "  header:{'Content-Type':'application/json'},",
+          "  body:{mode:'raw', raw: JSON.stringify({ email: VAR.get('email'), password: VAR.get('password') })}",
+          "}, (err,res)=> cb(!err && res && saveTokens(res))); }",
+          "function doRefresh(cb){ const ref=VAR.get('refresh'); if(!ref){ cb(false); return; } pm.sendRequest({",
+          "  url:`${VAR.get('baseUrl')}/api/v1/auth/refresh`, method:'POST',",
+          "  header:{'Content-Type':'application/json','Authorization':`Bearer ${ref}`},",
+          "  body:{mode:'raw', raw:'{}'}",
+          "}, (err,res)=> cb(!err && res && saveTokens(res))); }",
+          "doRefresh(ok=>{ if(ok){ replay(); return; } doLogin(ok2=>{ if(ok2){ replay(); } else { VAR.unset('__retrying'); } }); });"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Clear retry flag; capture any token pair returned by any endpoint",
+          "pm.collectionVariables.unset('__retrying');",
+          "try{ const j=pm.response.json();",
+          "  const acc=j.access||j.data?.access||j.access_token||j.data?.access_token||j.token||j.data?.token;",
+          "  const ref=j.refresh||j.data?.refresh||j.refresh_token||j.data?.refresh_token;",
+          "  if(acc){ pm.collectionVariables.set('access', acc); pm.collectionVariables.set('token', acc);} if(ref){ pm.collectionVariables.set('refresh', ref);} }catch(e){}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Forgot/Reset Password • HR/Admin",
+      "request": {
+        "method": "POST",
+        "header": [ { "key": "Content-Type", "value": "application/json" } ],
+        "url": "{{baseUrl}}/api/v1/rbac/users/reset-password",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{targetEmail}}\",\n  \"password\": \"{{newPassword}}\"\n}"
+        }
+      }
+    }
+  ]
+}
+

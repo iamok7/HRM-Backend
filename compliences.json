@@ -1,0 +1,188 @@
+{
+  "info": {
+    "name": "HRMS — Payroll & Compliance Update",
+    "_postman_id": "d2f1e4f8-0b8a-4a6c-a9f7-hrms-local",
+    "description": "Local payroll & compliance smoke tests",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Auth / Login (sets {{accessToken}})",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Content-Type", "value": "application/json" }],
+        "url": { "raw": "{{baseUrl}}/api/v1/auth/login", "host": ["{{baseUrl}}"], "path": ["api", "v1", "auth", "login"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "let json = pm.response.json();",
+              "pm.environment.set('accessToken', json.access || json.token || '');",
+              "pm.environment.set('refreshToken', json.refresh || '');"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pay Runs / Create Pay Run",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "url": { "raw": "{{baseUrl}}/api/v1/pay-runs", "host": ["{{baseUrl}}"], "path": ["api", "v1", "pay-runs"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"{{run_name}}\",\n  \"company_id\": {{company_id}},\n  \"period_start\": \"{{period_start}}\",\n  \"period_end\": \"{{period_end}}\",\n  \"pay_cycle_id\": {{pay_cycle_id}}\n}"
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "exec": [
+              "let d = pm.response.json();",
+              "let id = d?.data?.id || d?.id;",
+              "if (id) pm.environment.set('run_id', id.toString());"
+            ],
+            "type": "text/javascript"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pay Runs / Get Pay Run",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+        "url": { "raw": "{{baseUrl}}/api/v1/pay-runs/{{run_id}}", "host": ["{{baseUrl}}"], "path": ["api","v1","pay-runs","{{run_id}}"] }
+      }
+    },
+    {
+      "name": "Pay Runs / Calculate Pay Run (populate items)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+        "url": { "raw": "{{baseUrl}}/api/v1/pay-runs/{{run_id}}/calculate", "host": ["{{baseUrl}}"], "path": ["api","v1","pay-runs","{{run_id}}","calculate"] }
+      }
+    },
+    {
+      "name": "Pay Runs / List Run Items",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+        "url": { "raw": "{{baseUrl}}/api/v1/pay-runs/{{run_id}}/items", "host": ["{{baseUrl}}"], "path": ["api","v1","pay-runs","{{run_id}}","items"] }
+      }
+    },
+    {
+      "name": "Pay Runs / Approve Pay Run (optional)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+        "url": { "raw": "{{baseUrl}}/api/v1/pay-runs/{{run_id}}/approve", "host": ["{{baseUrl}}"], "path": ["api","v1","pay-runs","{{run_id}}","approve"] }
+      }
+    },
+    {
+      "name": "Pay Runs / Unlock Pay Run (if needed)",
+      "request": {
+        "method": "POST",
+        "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+        "url": { "raw": "{{baseUrl}}/api/v1/pay-runs/{{run_id}}/unlock", "host": ["{{baseUrl}}"], "path": ["api","v1","pay-runs","{{run_id}}","unlock"] }
+      }
+    },
+    {
+      "name": "Compliance — Preview for Run",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/compliance/preview?company_id={{company_id}}&state={{state}}&run_id={{run_id}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api","v1","compliance","preview"],
+          "query": [
+            { "key": "company_id", "value": "{{company_id}}" },
+            { "key": "state", "value": "{{state}}" },
+            { "key": "run_id", "value": "{{run_id}}" }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Compliance — Apply to Run",
+      "request": {
+        "method": "POST",
+        "header": [
+          { "key": "Content-Type", "value": "application/json" },
+          { "key": "Authorization", "value": "Bearer {{accessToken}}" }
+        ],
+        "url": { "raw": "{{baseUrl}}/api/v1/compliance/apply", "host": ["{{baseUrl}}"], "path": ["api","v1","compliance","apply"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"company_id\": {{company_id}},\n  \"state\": \"{{state}}\",\n  \"run_id\": {{run_id}}\n}"
+        }
+      }
+    },
+    {
+      "name": "Compliance — Export (optional)",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/compliance/export?run_id={{run_id}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api","v1","compliance","export"],
+          "query": [{ "key": "run_id", "value": "{{run_id}}" }]
+        }
+      }
+    },
+    {
+      "name": "Compliance — Admin / Configs by Type",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+        "url": {
+          "raw": "{{baseUrl}}/api/v1/compliance/configs?type={{type}}&company_id={{company_id}}&state={{state}}",
+          "host": ["{{baseUrl}}"],
+          "path": ["api","v1","compliance","configs"],
+          "query": [
+            { "key": "type", "value": "{{type}}"},
+            { "key": "company_id", "value": "{{company_id}}"},
+            { "key": "state", "value": "{{state}}"}
+          ]
+        }
+      }
+    },
+    {
+      "name": "Compliance — Admin / _introspect",
+      "request": {
+        "method": "GET",
+        "header": [{ "key": "Authorization", "value": "Bearer {{accessToken}}" }],
+        "url": { "raw": "{{baseUrl}}/api/v1/compliance/_introspect", "host": ["{{baseUrl}}"], "path": ["api","v1","compliance","_introspect"] }
+      }
+    }
+  ],
+  "event": [],
+  "variable": [
+    { "key": "baseUrl", "value": "http://127.0.0.1:5000" },
+    { "key": "email", "value": "admin@example.com" },
+    { "key": "password", "value": "4445" },
+    { "key": "accessToken", "value": "" },
+    { "key": "company_id", "value": "1" },
+    { "key": "state", "value": "MH" },
+    { "key": "type", "value": "PF" },
+    { "key": "pay_cycle_id", "value": "1" },
+    { "key": "run_name", "value": "Aug 2025" },
+    { "key": "period_start", "value": "2025-08-01" },
+    { "key": "period_end", "value": "2025-08-31" },
+    { "key": "run_id", "value": "" }
+  ]
+}

@@ -1,0 +1,1342 @@
+{
+  "info": {
+    "_postman_id": "4271e4f6-179a-4ac6-a4d2-1b0584e9486f",
+    "name": "HRMS - Atndnce (with variables)",
+    "description": "All attendance-related APIs using {{base_url}} and common variables.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "40141242",
+    "_collection_link": "https://dwpm-workspace.postman.co/workspace/Personal-Workspace~14e4aa45-0a21-4318-8f39-1cc562649236/collection/40141242-4271e4f6-179a-4ac6-a4d2-1b0584e9486f?action=share&source=collection_link&creator=40141242"
+  },
+  "item": [
+    {
+      "name": "Attendance - Masters",
+      "item": [
+        {
+          "name": "Holidays - List",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/holidays?companyId={{company_id}}&locationId={{location_id}}&page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "holidays"
+              ],
+              "query": [
+                {
+                  "key": "companyId",
+                  "value": "{{company_id}}"
+                },
+                {
+                  "key": "locationId",
+                  "value": "{{location_id}}"
+                },
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Holidays - Create",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": 1,\n  \"location_id\": 1,\n  \"name\": \"Diwali\",\n  \"date\": \"2025-10-20\",\n  \"is_optional\": false,\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/holidays",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "holidays"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Holidays - Update (id=1)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Diwali (Updated)\",\n  \"date\": \"2025-10-21\",\n  \"is_optional\": false,\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/holidays/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "holidays",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Holidays - Delete (id=1)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/holidays/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "holidays",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Weekly Off Rules - List",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/weekly-off?companyId={{company_id}}&locationId={{location_id}}&is_active=true&page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "weekly-off"
+              ],
+              "query": [
+                {
+                  "key": "companyId",
+                  "value": "{{company_id}}"
+                },
+                {
+                  "key": "locationId",
+                  "value": "{{location_id}}"
+                },
+                {
+                  "key": "is_active",
+                  "value": "true"
+                },
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Weekly Off Rules - Create",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"companyId\": 1,\n  \"locationId\": 1,\n  \"weekday\": 6,          // 0 = Mon, 1 = Tue, ..., 6 = Sun\n  \"is_alternate\": false, // or true if alternate weeks\n  \"week_numbers\": null,  // or \"1,3\" when is_alternate = true\n  \"is_active\": true\n}\n"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/weekly-off",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "weekly-off"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Weekly Off Rules - Update (id=2)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": 1,\n  \"location_id\": 1,\n  \"name\": \"Weekly Off - Thursday\",\n  \"weekday\": 3,\n  \"is_alternate\": false,\n  \"week_numbers\": null,\n  \"is_active\": true\n}\n// {\n//   \"company_id\": 1,\n//   \"location_id\": 1,\n//   \"name\": \"2nd & 4th Saturday Off\",\n//   \"weekday\": 5,           // Saturday\n//   \"is_alternate\": true,\n//   \"week_numbers\": \"2,4\",  // which weeks of month\n//   \"is_active\": true\n// }\n"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/weekly-off/2",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "weekly-off",
+                "2"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Weekly Off Rules - Delete (id=1)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/weekly-off/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "weekly-off",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shifts - List",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/shifts?companyId={{company_id}}&page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "shifts"
+              ],
+              "query": [
+                {
+                  "key": "companyId",
+                  "value": "{{company_id}}"
+                },
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shifts - Create",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"company_id\": 1,\n  \"name\": \"General Shift\",\n  \"code\": \"GEN\",\n  \"start_time\": \"09:00\",\n  \"end_time\": \"18:00\",\n  \"break_minutes\": 60,\n  \"is_night_shift\": false,\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/shifts",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "shifts"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shifts - Get by ID (shift_id=1)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/shifts/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "shifts",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shifts - Update (shift_id=1)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"General Shift (Updated)\",\n  \"start_time\": \"10:00\",\n  \"end_time\": \"19:00\",\n  \"break_minutes\": 60,\n  \"is_night_shift\": false,\n  \"is_active\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/shifts/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "shifts",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shifts - Delete (shift_id=1)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/masters/shifts/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "masters",
+                "shifts",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Shift Assignments",
+      "item": [
+        {
+          "name": "Shift Assignments - List",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/shift-assignments?employeeId={{employee_id}}&from=2025-11-01&to=2025-11-30&page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "shift-assignments"
+              ],
+              "query": [
+                {
+                  "key": "employeeId",
+                  "value": "{{employee_id}}"
+                },
+                {
+                  "key": "from",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2025-11-30"
+                },
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shift Assignments - Create",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employee_id\": 1,\n  \"shift_id\": 1,\n  \"start_date\": \"2025-11-01\",\n  \"end_date\": null,\n  \"auto_close\": true\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/shift-assignments",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "shift-assignments"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shift Assignments - Update (id=1)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"shift_id\": 1,\n  \"start_date\": \"2025-11-01\",\n  \"end_date\": \"2025-11-30\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/shift-assignments/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "shift-assignments",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Shift Assignments - Delete (id=1)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/shift-assignments/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "shift-assignments",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Calendar & Monthly",
+      "item": [
+        {
+          "name": "Calendar - Employee Monthly View",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/calendar?employeeId={{employee_id}}&year={{year}}&month={{month}}&includePunches=true&includeShift=true",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "calendar"
+              ],
+              "query": [
+                {
+                  "key": "employeeId",
+                  "value": "{{employee_id}}"
+                },
+                {
+                  "key": "year",
+                  "value": "{{year}}"
+                },
+                {
+                  "key": "month",
+                  "value": "{{month}}"
+                },
+                {
+                  "key": "includePunches",
+                  "value": "true"
+                },
+                {
+                  "key": "includeShift",
+                  "value": "true"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Monthly Status - Employee",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/monthly-status?employeeId={{employee_id}}&year={{year}}&month={{month}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "monthly-status"
+              ],
+              "query": [
+                {
+                  "key": "employeeId",
+                  "value": "{{employee_id}}"
+                },
+                {
+                  "key": "year",
+                  "value": "{{year}}"
+                },
+                {
+                  "key": "month",
+                  "value": "{{month}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Punches & Import",
+      "item": [
+        {
+          "name": "Punches - List (Admin/HR)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/punches?employeeId={{employee_id}}&from=2025-11-01&to=2025-11-01&page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "punches"
+              ],
+              "query": [
+                {
+                  "key": "employeeId",
+                  "value": "{{employee_id}}"
+                },
+                {
+                  "key": "from",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Punches - Create (Admin/HR)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employee_id\": 1,\n  \"ts\": \"2025-11-01T09:00:00\",\n  \"direction\": \"in\",\n  \"source\": \"manual_admin\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/punches",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "punches"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Punches - Delete (id=1)",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/punches/1",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "punches",
+                "1"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Punches - Import from Sheet (CSV)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": []
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/punches/import",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "punches",
+                "import"
+              ]
+            },
+            "description": "Upload a CSV file with punches. Columns depend on backend implementation (e.g. employee_code, ts, direction...)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Self Punch (Employee)",
+      "item": [
+        {
+          "name": "Self Punches - List My Punches",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/self-punches?from=2025-11-01&to=2025-11-01&page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "self-punches"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Self Punches - Mark In/Out (Face/Device)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"ts\": \"2025-11-01T09:05:00\",\n  \"direction\": \"in\",\n  \"source\": \"self_app\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/self-punches",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "self-punches"
+              ]
+            },
+            "description": "For face recognition / mobile app / kiosk: call this as the logged-in employee."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Missed Punch",
+      "item": [
+        {
+          "name": "Missed Punch - List",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/missed-punch?employeeId={{employee_id}}&from={{mp_from}}&to={{mp_to}}&status={{mp_status}}&page={{page}}&limit={{limit}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "missed-punch"
+              ],
+              "query": [
+                {
+                  "key": "employeeId",
+                  "value": "{{employee_id}}"
+                },
+                {
+                  "key": "from",
+                  "value": "{{mp_from}}"
+                },
+                {
+                  "key": "to",
+                  "value": "{{mp_to}}"
+                },
+                {
+                  "key": "status",
+                  "value": "{{mp_status}}"
+                },
+                {
+                  "key": "page",
+                  "value": "{{page}}"
+                },
+                {
+                  "key": "limit",
+                  "value": "{{limit}}"
+                }
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Missed Punch - Create Request",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"employee_id\": 2,\n  \"req_date\": \"2025-11-10\",\n  \"in_time\": \"09:05\",\n  \"out_time\": \"18:10\",\n  \"reason\": \"Forgot to punch\",\n  \"remarks\": null\n}\n"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/missed-punch",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "missed-punch"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Missed Punch - Approve (id=7)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"approver_remarks\": \"Approved\",\n  \"status\": \"approved\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/missed-punch/7/approve",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "missed-punch",
+                "7",
+                "approve"
+              ]
+            },
+            "description": "Approver approves the missed punch; backend will upsert punches and recompute daily status."
+          },
+          "response": []
+        },
+        {
+          "name": "Missed Punch - Reject (id=6)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"approver_remarks\": \"Insufficient justification\",\n  \"status\": \"rejected\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance/missed-punch/6/reject",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance",
+                "missed-punch",
+                "6",
+                "reject"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Attendance - Rollup (For Payroll)",
+      "item": [
+        {
+          "name": "Attendance Rollup - Company Range",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{access}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/api/v1/attendance-rollup?companyId={{company_id}}&from=2025-11-01&to=2025-11-30",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "api",
+                "v1",
+                "attendance-rollup"
+              ],
+              "query": [
+                {
+                  "key": "companyId",
+                  "value": "{{company_id}}"
+                },
+                {
+                  "key": "from",
+                  "value": "2025-11-01"
+                },
+                {
+                  "key": "to",
+                  "value": "2025-11-30"
+                }
+              ]
+            },
+            "description": "Rollup of attendance for the date range per employee, used by payroll/compliance."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "POST /api/v1/auth/login Copy",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "",
+              "pm.test('200 OK', ()=> pm.response.code===200);",
+              "let j={}; try{j=pm.response.json()}catch(e){}",
+              "pm.collectionVariables.set('access', j.access || (j.data && j.data.access));",
+              "pm.collectionVariables.set('refresh', j.refresh || (j.data && j.data.refresh));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "auth": {
+          "type": "noauth"
+        },
+        "method": "POST",
+        "header": [
+          {
+            "key": "Accept",
+            "value": "application/json"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"email\": \"{{email}}\",\n  \"password\": \"{{password}}\"\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/v1/auth/login",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "v1",
+            "auth",
+            "login"
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:5000"
+    },
+    {
+      "key": "access",
+      "value": ""
+    },
+    {
+      "key": "refresh",
+      "value": ""
+    },
+    {
+      "key": "company_id",
+      "value": "1"
+    },
+    {
+      "key": "location_id",
+      "value": "1"
+    },
+    {
+      "key": "employee_id",
+      "value": "1"
+    },
+    {
+      "key": "year",
+      "value": "2025"
+    },
+    {
+      "key": "month",
+      "value": "11"
+    },
+    {
+      "key": "mp_from",
+      "value": "2025-11-01"
+    },
+    {
+      "key": "mp_to",
+      "value": "2025-11-30"
+    },
+    {
+      "key": "mp_status",
+      "value": ""
+    },
+    {
+      "key": "page",
+      "value": "1"
+    },
+    {
+      "key": "limit",
+      "value": "50"
+    }
+  ]
+}
